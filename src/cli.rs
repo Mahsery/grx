@@ -363,15 +363,15 @@ USAGE:
     grx [OPTIONS] [DSL_EXPRESSIONS] [TARGETS...]
 
 EXAMPLES:
-    grx auth p:src/                 # Search 'auth' under src/ (p: or path:)
+    grx auth p:src/                 # Search 'auth' under src/ (p:root)
     grx "Steam/"                    # First bare arg is always pattern (even with slashes)
     grx in:report                   # Discover files/entries whose basename contains 'report'
     grx in:report t:pdf             # Discover PDF files containing 'report'
     grx in:=report.md p:Documents/  # Discover exact 'report.md' under Documents/
     grx "annual revenue" in:report  # Search content inside files matching 'report'
     grx kind:dir in:cache           # Discover directories named 'cache'
-    grx dir:src np:data             # Discover directories named 'src', excluding 'data'
-    grx dir:=src tail:5             # Discover exact directory 'src', showing last 5 with colors
+    grx kind:dir in:src np:data     # Discover directories named 'src', excluding 'data'
+    grx kind:dir in:=src tail:5     # Discover exact directory 'src', showing last 5 with colors
     grx in:test sort:size tail:10   # Sort matches by file size, showing last 10
     grx t:log larger:10MiB          # Discover log files larger than 10 MiB
     grx t:rs newer:7d               # Discover Rust files modified within 7 days
@@ -531,14 +531,8 @@ pub fn render_tutorial(color: bool) -> String {
     push_cmd(
         &mut out,
         color,
-        "grx @impl :rs",
+        "grx @impl t:rs",
         "Whole-word 'impl' (matches 'impl', NOT 'Simple')",
-    );
-    push_cmd(
-        &mut out,
-        color,
-        "grx w:impl",
-        "Alias for whole-word (@impl)",
     );
     push_cmd(
         &mut out,
@@ -549,14 +543,8 @@ pub fn render_tutorial(color: bool) -> String {
     push_cmd(
         &mut out,
         color,
-        "grx -@simple",
-        "Whole-word negation (rejects lines with word 'simple')",
-    );
-    push_cmd(
-        &mut out,
-        color,
-        "grx @impl -@simple :rs",
-        "Whole-word 'impl', no 'simple', in Rust files",
+        "grx @impl ns:simple t:rs",
+        "Whole-word 'impl', reject lines containing 'simple', in Rust files",
     );
     push_cmd(
         &mut out,
@@ -627,7 +615,7 @@ pub fn render_tutorial(color: bool) -> String {
         &mut out,
         color,
         "grx pattern p:src/",
-        "Scoped root path inclusion (p: or path:)",
+        "Scoped root path inclusion (p:path)",
     );
     push_cmd(
         &mut out,
@@ -638,37 +626,31 @@ pub fn render_tutorial(color: bool) -> String {
     push_cmd(
         &mut out,
         color,
-        "grx pattern no:proj/",
-        "Exclude directories containing 'proj/' (no glob needed)",
-    );
-    push_cmd(
-        &mut out,
-        color,
-        "grx pattern no-path:target/",
-        "Explicit namespace for directory exclusion",
+        "grx pattern np:target/",
+        "Explicit directory path exclusion (np:dir)",
     );
     push_cmd(
         &mut out,
         color,
         "grx pattern nt:c,h",
-        "Exclude .c and .h files (or no-type:c,h)",
+        "Exclude .c and .h files (nt:ext)",
     );
     push_cmd(
         &mut out,
         color,
         "grx pattern ns:debug",
-        "Exclude lines containing 'debug' (or no-str:debug)",
+        "Exclude lines containing 'debug' (ns:str)",
     );
     push_cmd(
         &mut out,
         color,
-        "grx pattern :rs",
-        "Include only Rust (*.rs) files",
+        "grx pattern t:rs",
+        "Include only Rust (*.rs) files (t:ext)",
     );
     push_cmd(
         &mut out,
         color,
-        "grx pattern :web",
+        "grx pattern t:web",
         "Include web files (*.html, *.css, *.js, *.ts)",
     );
 
@@ -690,7 +672,7 @@ pub fn render_tutorial(color: bool) -> String {
     push_cmd(
         &mut out,
         color,
-        "grx pattern depth:2 p:src/",
+        "grx pattern d:2 p:src/",
         "Search inside src/ up to 2 levels deep",
     );
     push_cmd(
@@ -706,14 +688,8 @@ pub fn render_tutorial(color: bool) -> String {
     push_cmd(
         &mut out,
         color,
-        "grx pattern top:10",
+        "grx pattern max:10",
         "Limit maximum matching lines per file to 10",
-    );
-    push_cmd(
-        &mut out,
-        color,
-        "grx pattern limit:5",
-        "Alias for per-file top:5",
     );
     push_cmd(
         &mut out,
@@ -736,7 +712,7 @@ pub fn render_tutorial(color: bool) -> String {
     push_cmd(
         &mut out,
         color,
-        "grx pattern top:5 ctx:2 :rs",
+        "grx pattern max:5 ctx:2 t:rs",
         "Compose match limits, context, and file types",
     );
     push_cmd(
@@ -752,13 +728,13 @@ pub fn render_tutorial(color: bool) -> String {
     push_cmd(
         &mut out,
         color,
-        "grx get..id :rs",
+        "grx get..id t:rs",
         "Unquoted double-dot wildcard (matches 'get_id', 'getUserById')",
     );
     push_cmd(
         &mut out,
         color,
-        "grx fn..main :rs",
+        "grx fn..main t:rs",
         "Matches 'fn main()', 'fn init_main(..)')",
     );
     push_cmd(
@@ -807,25 +783,25 @@ pub fn render_tutorial(color: bool) -> String {
     push_cmd(
         &mut out,
         color,
-        "grx ELF :bin",
+        "grx ELF kind:bin",
         "Safely inspect ELF headers in binary files",
     );
     push_cmd(
         &mut out,
         color,
-        "grx hex:7f454c46 :bin",
+        "grx hex:7f454c46 kind:bin",
         "Search raw byte signatures in hexadecimal",
     );
     push_cmd(
         &mut out,
         color,
-        "grx str:4 :bin",
+        "grx str:4 kind:bin",
         "Extract printable ASCII strings >= 4 chars with byte offsets",
     );
     push_cmd(
         &mut out,
         color,
-        "grx strings:8 :bin",
+        "grx str:8 kind:bin",
         "Extract printable strings >= 8 chars",
     );
 
@@ -879,26 +855,31 @@ pub fn render_tutorial(color: bool) -> String {
         "Line contains 'auth' but NOT 'expired'",
     );
 
-    // 10. UNARY LINE MODIFIERS (+ AND -)
-    push_section(&mut out, color, "10", "UNARY LINE MODIFIERS (+ AND -)");
-    out.push_str("  Filter lines with concise plus/minus prefixes:\n");
+    // 10. CONTENT EXCLUSION & NEGATIVE STRINGS
+    push_section(
+        &mut out,
+        color,
+        "10",
+        "CONTENT EXCLUSION & NEGATIVE STRINGS",
+    );
+    out.push_str("  Exclude unwanted content lines cleanly:\n");
     push_cmd(
         &mut out,
         color,
-        "grx auth +token",
-        "Match 'auth', line must also contain 'token'",
+        "grx auth ns:test",
+        "Match 'auth', rejecting lines containing 'test' (ns:str)",
     );
     push_cmd(
         &mut out,
         color,
-        "grx auth -test",
-        "Match 'auth', line must not contain 'test'",
+        "grx auth NOT test",
+        "Boolean NOT: match 'auth', reject lines containing 'test'",
     );
     push_cmd(
         &mut out,
         color,
-        "grx auth ns:debug",
-        "Explicit string negation namespace",
+        "grx auth ns:debug t:rs",
+        "Compose content exclusion with file type filter",
     );
 
     // 11. HIDDEN FILES & UNRESTRICTED MODES
@@ -910,7 +891,13 @@ pub fn render_tutorial(color: bool) -> String {
         "grx yes:dots 'config'",
         "Search inside hidden files (.env, .config/)",
     );
-    push_cmd(&mut out, color, "grx -u", "Unrestricted: ignore .gitignore");
+    push_cmd(
+        &mut out,
+        color,
+        "grx no:ignore 'TODO'",
+        "Bypass .gitignore filtering directly in DSL (or -u)",
+    );
+    push_cmd(&mut out, color, "grx -u", "POSIX -u: ignore .gitignore");
     push_cmd(
         &mut out,
         color,
@@ -964,7 +951,7 @@ pub fn render_tutorial(color: bool) -> String {
     push_cmd(
         &mut out,
         color,
-        "grx pattern p:src/ :rs",
+        "grx pattern p:src/ t:rs",
         "Ergonomic DSL mode (default)",
     );
     push_cmd(
@@ -1057,20 +1044,14 @@ pub fn render_tutorial(color: bool) -> String {
     push_cmd(
         &mut out,
         color,
-        "grx %%from_ptr_err",
-        "Fast 2-key alias (auto-splits snake_case & camelCase)",
+        "grx fz:from_ptr_err",
+        "Fuzzy query: auto-splits snake_case & camelCase",
     );
     push_cmd(
         &mut out,
         color,
         "grx -Z 'string,from,\"\"'",
         "CLI flag with exact strings (or fz:'string,from,\"\"')",
-    );
-    push_cmd(
-        &mut out,
-        color,
-        "grx %%'\"\",from,ptr'",
-        "Shell-safe quote: outer quote prevents shell eating \"\"",
     );
 
     // 17. UNIFIED FILE DISCOVERY & ENTRY SELECTION
@@ -1111,7 +1092,7 @@ pub fn render_tutorial(color: bool) -> String {
         &mut out,
         color,
         "grx in:report t:pdf",
-        "Narrow by file type or extension (t: or type:)",
+        "Narrow by file type or extension (t:ext)",
     );
     push_cmd(
         &mut out,
@@ -1122,13 +1103,13 @@ pub fn render_tutorial(color: bool) -> String {
     push_cmd(
         &mut out,
         color,
-        "grx dir:src np:data",
+        "grx kind:dir in:src np:data",
         "Discover directories named 'src' excluding 'data'",
     );
     push_cmd(
         &mut out,
         color,
-        "grx dir:=src tail:5",
+        "grx kind:dir in:=src tail:5",
         "Discover exact directory 'src' showing last 5 with colors",
     );
     push_cmd(
@@ -1304,11 +1285,7 @@ fn highlight_cmd(cmd: &str) -> String {
             result.push_str("\x1b[1;37m");
             result.push_str(&token);
             result.push_str("\x1b[0m");
-        } else if token.starts_with('-')
-            && !token.starts_with("-@")
-            && !token.starts_with("-w:")
-            && !token.starts_with("-test")
-        {
+        } else if token.starts_with('-') {
             result.push_str("\x1b[1;35m");
             result.push_str(&token);
             result.push_str("\x1b[0m");
@@ -1322,42 +1299,37 @@ fn highlight_cmd(cmd: &str) -> String {
             result.push_str(&token);
             result.push_str("\x1b[0m");
         } else if token.starts_with('@')
-            || token.starts_with("-@")
-            || token.starts_with("w:")
-            || token.starts_with("-w:")
-            || token.starts_with(':')
             || token.starts_with("p:")
             || token.starts_with("in:")
+            || token.starts_with("ni:")
             || token.starts_with("np:")
-            || token.starts_with("no-path:")
-            || token.starts_with("no:")
             || token.starts_with("nt:")
-            || token.starts_with("no-type:")
             || token.starts_with("ns:")
-            || token.starts_with("no-str:")
+            || token.starts_with("kind:")
+            || token.starts_with("sort:")
+            || token.starts_with("head:")
+            || token.starts_with("tail:")
+            || token.starts_with("max:")
+            || token.starts_with("d:")
+            || token.starts_with("ctx:")
+            || token.starts_with("larger:")
+            || token.starts_with("smaller:")
+            || token.starts_with("newer:")
+            || token.starts_with("older:")
             || token.starts_with("near:")
             || token.starts_with("no-near:")
-            || token.starts_with("-near:")
             || token.starts_with("fz:")
-            || token.starts_with("fuzzy:")
-            || token.starts_with("%%")
-            || token.starts_with("d:")
-            || token.starts_with("depth:")
-            || token.starts_with("top:")
-            || token.starts_with("limit:")
-            || token.starts_with("ctx:")
             || token.starts_with("str:")
-            || token.starts_with("strings:")
             || token.starts_with("hex:")
             || token.starts_with("re:")
             || (token.starts_with('/') && token.ends_with('/') && token.len() >= 2)
             || token.starts_with("yes:")
+            || token.starts_with("no:")
+            || token.starts_with("mv:")
+            || token.starts_with("cp:")
+            || token.starts_with("trash:")
+            || token.starts_with("dry:")
             || token.starts_with('=')
-            || token.starts_with('+')
-            || (token.starts_with('-')
-                && (token.starts_with("-@")
-                    || token.starts_with("-w:")
-                    || token.starts_with("-test")))
             || token.contains("..")
             || token.starts_with('^')
             || token.ends_with('$')
@@ -1424,16 +1396,14 @@ mod tests {
         assert!(plain.contains("grx Search Engine & DSL Tutorial"));
         assert!(plain.contains("EXACT MATCHING: WHOLE-WORD, LITERALS & EXACT LINES"));
         assert!(plain.contains("@impl"));
-        assert!(plain.contains("w:impl"));
         assert!(plain.contains("-w impl"));
-        assert!(plain.contains("-@simple"));
         assert!(plain.contains("-x \"impl Foo for Bar\""));
         assert!(plain.contains("\"Steam/\""));
         assert!(plain.contains("=fn()"));
         assert!(plain.contains("np:proj"));
-        assert!(plain.contains("no:proj/"));
+        assert!(plain.contains("np:target/"));
         assert!(plain.contains("d:0"));
-        assert!(plain.contains("top:10"));
+        assert!(plain.contains("max:10"));
         assert!(plain.contains("ctx:3"));
         assert!(plain.contains("PROXIMITY SEARCH & LINE WINDOW CONSTRAINTS"));
         assert!(plain.contains("FUZZY TOKEN PERMUTATION SEARCH"));
@@ -1441,7 +1411,17 @@ mod tests {
         assert!(plain.contains("in:report"));
         assert!(plain.contains("kind:dir"));
         assert!(plain.contains("near:5,safety"));
-        assert!(plain.contains("%%from_ptr_err"));
+        assert!(plain.contains("fz:from_ptr_err"));
+
+        // Strictly verify removal of deprecated tokens
+        assert!(!plain.contains("w:impl"));
+        assert!(!plain.contains("-@simple"));
+        assert!(!plain.contains("no:proj/"));
+        assert!(!plain.contains("top:10"));
+        assert!(!plain.contains("%%from_ptr_err"));
+        assert!(!plain.contains(" :rs"));
+        assert!(!plain.contains(" :bin"));
+        assert!(!plain.contains("dir:src"));
     }
 
     #[test]
