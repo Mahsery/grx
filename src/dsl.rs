@@ -284,11 +284,18 @@ fn find_subslice(haystack: &[u8], needle: &[u8], case_sensitive: bool) -> Option
 fn parse_kind(s: &str) -> Result<EntryKind, String> {
     let val = s.strip_prefix("kind:").unwrap_or(s);
     match val {
-        "file" | "f" => Ok(EntryKind::File),
-        "dir" | "d" => Ok(EntryKind::Dir),
-        "link" | "l" => Ok(EntryKind::Link),
-        "bin" | "binary" | "exe" => Ok(EntryKind::Bin),
-        "text" | "txt" => Ok(EntryKind::Text),
+        "file" => Ok(EntryKind::File),
+        "dir" => Ok(EntryKind::Dir),
+        "link" => Ok(EntryKind::Link),
+        "bin" => Ok(EntryKind::Bin),
+        "text" => Ok(EntryKind::Text),
+        "f" => Err("Entry kind alias 'f' is deprecated. Use canonical 'kind:file'.".into()),
+        "d" => Err("Entry kind alias 'd' is deprecated. Use canonical 'kind:dir'.".into()),
+        "l" => Err("Entry kind alias 'l' is deprecated. Use canonical 'kind:link'.".into()),
+        "binary" | "exe" => Err(format!(
+            "Entry kind alias '{val}' is deprecated. Use canonical 'kind:bin'."
+        )),
+        "txt" => Err("Entry kind alias 'txt' is deprecated. Use canonical 'kind:text'.".into()),
         other => Err(format!(
             "Invalid entry kind '{other}' in '{s}': expected file, dir, link, bin, or text"
         )),
@@ -419,6 +426,8 @@ pub struct Query {
     pub follow_symlinks: Option<bool>,
     /// Search cache directories (.cache/, Cache/, CachedData/).
     pub search_cache: bool,
+    /// Respect .gitignore and .ignore rules (Some(true) = yes:ignore, Some(false) = no:ignore, None = cli/config default).
+    pub respect_ignore: Option<bool>,
     /// Search inside binary files.
     pub include_binaries: bool,
     /// Search ONLY binary files.
@@ -685,8 +694,10 @@ pub enum Token {
     TypeInclude(Vec<String>),
     /// Target directory or file path.
     Target(PathBuf),
-    /// Search hidden files toggle (`yes:dots`, `no:dots`, `+dot`, `-dot`).
+    /// Search hidden files toggle (`yes:dots`, `no:dots`).
     SearchHidden(bool),
+    /// Respect .gitignore and .ignore rules (`yes:ignore`, `no:ignore`).
+    RespectIgnore(bool),
     /// Follow symlinks toggle (`--follow`, `--no-follow`).
     FollowSymlinks(bool),
     /// Search cache directory toggle (`yes:cache`).
@@ -990,6 +1001,7 @@ impl DslParser {
                 }
                 Token::Target(p) => query.targets.push(p.clone()),
                 Token::SearchHidden(h) => query.search_hidden = Some(*h),
+                Token::RespectIgnore(r) => query.respect_ignore = Some(*r),
                 Token::FollowSymlinks(f) => query.follow_symlinks = Some(*f),
                 Token::SearchCache(c) => query.search_cache = *c,
                 Token::IncludeBinaries => query.include_binaries = true,
@@ -1147,7 +1159,7 @@ impl DslParser {
 
     fn classify_with_compiler_and_config(
         s: &str,
-        config: Option<&crate::config::Config>,
+        _config: Option<&crate::config::Config>,
         compile: &impl Fn(&str, bool) -> SearchPattern,
     ) -> Result<Token, String> {
         // Boolean keywords
@@ -1171,37 +1183,43 @@ impl DslParser {
             return Ok(Token::NearInfix(val));
         }
 
-        // Fuzzy token query prefixes: "fz:...", "fuzzy:...", "%%..."
-        if s == "fz:" || s == "fuzzy:" || s == "%%" {
+        // Fuzzy token query prefix: "fz:..." (canonical)
+        if s == "fz:" {
             return Err(format!(
                 "fuzzy search pattern received an empty argument ('{s}'). \
-                 If you typed unquoted quotes like %%\"\", your shell stripped them before grx received them! \
-                 Wrap the argument in outer quotes: grx %%'\"\",from,ptr' or grx fz:'\"\",from,ptr'"
+                 Wrap the argument in outer quotes: grx fz:'a,b'"
             ));
         }
-        if let Some(rest) = s
-            .strip_prefix("fz:")
-            .or_else(|| s.strip_prefix("fuzzy:"))
-            .or_else(|| s.strip_prefix("%%"))
-        {
+        if let Some(rest) = s.strip_prefix("fz:") {
             let tokens = Self::split_fuzzy_tokens(rest, s)?;
             return Ok(Token::Fuzzy(FuzzyQuery {
                 tokens,
                 original: rest.to_string(),
             }));
         }
+        if s == "fuzzy:" || s == "%%" || s.starts_with("fuzzy:") || s.starts_with("%%") {
+            let rest = s
+                .strip_prefix("fuzzy:")
+                .or_else(|| s.strip_prefix("%%"))
+                .unwrap_or("");
+            return Err(format!(
+                "Fuzzy prefix in '{s}' is deprecated. Use canonical 'fz:{rest}'."
+            ));
+        }
 
-        // Inverted proximity filter: "no-near:..." or "-near:..."
-        if let Some(rest) = s
-            .strip_prefix("no-near:")
-            .or_else(|| s.strip_prefix("-near:"))
-        {
+        // Inverted proximity filter: "no-near:..." (canonical)
+        if let Some(rest) = s.strip_prefix("no-near:") {
             let (window, term) = Self::parse_proximity_args(rest)?;
             return Ok(Token::Proximity(ProximityFilter {
                 term,
                 window,
                 inverted: true,
             }));
+        }
+        if let Some(rest) = s.strip_prefix("-near:") {
+            return Err(format!(
+                "Prefix '-near:{rest}' is deprecated. Use canonical 'no-near:{rest}'."
+            ));
         }
 
         // Proximity filter: "near:..."
@@ -1217,102 +1235,68 @@ impl DslParser {
         // Explicit feature affirmation: "yes:..."
         if let Some(rest) = s.strip_prefix("yes:") {
             match rest.to_ascii_lowercase().as_str() {
-                "dots" | "dot" | "dotfiles" | "hidden" => return Ok(Token::SearchHidden(true)),
-                "bin" | "binary" | "binaries" => return Ok(Token::IncludeBinaries),
+                "dots" => return Ok(Token::SearchHidden(true)),
+                "ignore" => return Ok(Token::RespectIgnore(true)),
                 "case" => return Ok(Token::CaseSensitive(true)),
                 "cache" => return Ok(Token::SearchCache(true)),
-                _ => {}
+                "dot" | "dotfiles" | "hidden" => {
+                    return Err(format!(
+                        "Option 'yes:{rest}' is deprecated. Use canonical 'yes:dots' to search hidden files."
+                    ));
+                }
+                "bin" | "binary" | "binaries" => {
+                    return Err(format!(
+                        "'yes:{rest}' is deprecated. Use canonical 'kind:bin' to select binary files, or 'str:4' to extract printable strings."
+                    ));
+                }
+                other => {
+                    return Err(format!(
+                        "Unrecognized option 'yes:{other}'. Supported options: yes:dots, yes:ignore, yes:cache, yes:case"
+                    ));
+                }
             }
         }
 
-        // Feature, path, or extension negation: "no:..."
+        // Feature negation: "no:..."
         if let Some(rest) = s.strip_prefix("no:") {
             match rest.to_ascii_lowercase().as_str() {
-                "dots" | "dot" | "dotfiles" | "hidden" => return Ok(Token::SearchHidden(false)),
-                "bin" | "binary" | "binaries" => return Ok(Token::ExcludeBinaries),
+                "dots" => return Ok(Token::SearchHidden(false)),
+                "ignore" => return Ok(Token::RespectIgnore(false)),
                 "case" => return Ok(Token::CaseSensitive(false)),
                 "cache" => return Ok(Token::SearchCache(false)),
+                "dot" | "dotfiles" | "hidden" => {
+                    return Err(format!(
+                        "Option 'no:{rest}' is deprecated. Use canonical 'no:dots' to exclude hidden files."
+                    ));
+                }
+                "bin" | "binary" | "binaries" => {
+                    return Err(format!(
+                        "'no:{rest}' is deprecated. Use canonical 'kind:text' to select only plain text files."
+                    ));
+                }
                 _ => {
-                    if rest.is_empty() {
-                        return Err("Expected a path or extension after 'no:'".into());
+                    if rest.ends_with('/') || rest.ends_with('\\') {
+                        return Err(format!(
+                            "Prefix 'no:{rest}' is deprecated. Use canonical 'np:{rest}' to exclude directory path."
+                        ));
                     }
-                    if let Some(ext) = rest.strip_prefix("*.")
-                        && !ext.is_empty()
-                        && ext
-                            .chars()
-                            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '+')
-                    {
-                        return Ok(Token::TypeExclude(vec![ext.to_string()]));
-                    }
-                    if rest.contains('/')
-                        || rest.contains('\\')
-                        || rest.contains('*')
-                        || rest.contains('?')
-                        || rest.contains('[')
-                        || rest.contains(']')
-                    {
-                        let paths: Vec<String> = rest
-                            .split(',')
-                            .map(|p| p.trim().to_string())
-                            .filter(|p| !p.is_empty())
-                            .collect();
-                        return Ok(Token::PathExclude(paths));
-                    }
-                    if rest.starts_with('.') {
-                        let ext = rest.trim_start_matches('.');
-                        if !ext.is_empty()
-                            && ext
-                                .chars()
-                                .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '+')
-                        {
-                            return Ok(Token::TypeExclude(vec![ext.to_string()]));
-                        }
-                    }
-                    let candidate_exts: Vec<String> = rest
-                        .split(',')
-                        .map(|e| e.trim().trim_start_matches('.').to_string())
-                        .filter(|e| !e.is_empty())
-                        .collect();
-                    let default_cfg = if config.is_none() {
-                        Some(crate::config::Config::default())
-                    } else {
-                        None
-                    };
-                    let is_all_known_types = !candidate_exts.is_empty()
-                        && candidate_exts.iter().all(|e| {
-                            let known = match config {
-                                Some(cfg) => cfg.is_known_type(e),
-                                None => default_cfg.as_ref().is_some_and(|c| c.is_known_type(e)),
-                            };
-                            known
-                                || (rest.starts_with('.')
-                                    && e.chars().all(|c| {
-                                        c.is_alphanumeric() || c == '_' || c == '-' || c == '+'
-                                    }))
-                        });
-                    if is_all_known_types {
-                        return Ok(Token::TypeExclude(candidate_exts));
-                    }
-                    let paths: Vec<String> = rest
-                        .split(',')
-                        .map(|p| p.trim().to_string())
-                        .filter(|p| !p.is_empty())
-                        .collect();
-                    return Ok(Token::PathExclude(paths));
+                    return Err(format!(
+                        "Unrecognized negation 'no:{rest}'. Use canonical 'nt:{rest}' to exclude file types, 'np:{rest}' to exclude paths, 'ni:{rest}' to exclude basenames, or 'ns:{rest}' to exclude content lines."
+                    ));
                 }
             }
         }
 
         // Shorthand negation with "!": "!<dir>/" or "!*.<ext>"
         if let Some(rest) = s.strip_prefix('!') {
-            if (rest.ends_with('/') || rest.ends_with('\\')) && !rest.is_empty() {
-                return Ok(Token::PathExclude(vec![rest.to_string()]));
+            if let Some(ext) = rest.strip_prefix("*.") {
+                return Err(format!(
+                    "Prefix '{s}' is deprecated and shell-sensitive. Use canonical 'nt:{ext}' to exclude file type."
+                ));
             }
-            if let Some(ext) = rest.strip_prefix("*.")
-                && !ext.is_empty()
-            {
-                return Ok(Token::TypeExclude(vec![ext.to_string()]));
-            }
+            return Err(format!(
+                "Prefix '{s}' is deprecated and shell-sensitive. Use canonical 'np:{rest}' to exclude paths, or 'nt:{rest}' to exclude file types."
+            ));
         }
 
         // Exclusive filetype filters: "only:..."
@@ -1321,36 +1305,38 @@ impl DslParser {
                 || rest.eq_ignore_ascii_case("binary")
                 || rest.eq_ignore_ascii_case("binaries")
             {
-                return Ok(Token::OnlyBinaries);
+                return Err(
+                    "Prefix 'only:bin' has been consolidated. Use canonical 'kind:bin' to select binary files."
+                        .to_string(),
+                );
             }
-            if rest.eq_ignore_ascii_case("str") || rest.eq_ignore_ascii_case("strings") {
-                return Ok(Token::BinaryStrings(4));
+            if let Some(strings_len) = rest.strip_prefix("str") {
+                let n = strings_len.strip_prefix(':').unwrap_or("4");
+                return Err(format!(
+                    "Prefix 'only:str' has been consolidated. Use canonical 'str:{n}' to extract printable strings from binaries."
+                ));
             }
-            if rest.contains('/') || rest.contains('\\') {
-                return Err("only: selects filetypes; use p: for a path".into());
+            if rest.eq_ignore_ascii_case("dir")
+                || rest.eq_ignore_ascii_case("directory")
+                || rest.eq_ignore_ascii_case("dirs")
+            {
+                return Err(
+                    "Prefix 'only:dir' has been consolidated. Use canonical 'kind:dir' to select directories."
+                        .to_string(),
+                );
             }
-            let exts: Vec<String> = rest
-                .split(',')
-                .map(|e| e.trim().trim_start_matches('.').to_string())
-                .filter(|e| !e.is_empty())
-                .collect();
-            if !exts.is_empty() {
-                return Ok(Token::TypeInclude(exts));
-            }
+            return Err(format!(
+                "Prefix 'only:{rest}' has been consolidated. Use canonical 't:{rest}' to filter by file type."
+            ));
         }
 
-        // Traversal recursion depth limit: d:N, depth:N, maxdepth:N
-        if let Some(rest) = s
-            .strip_prefix("d:")
-            .or_else(|| s.strip_prefix("depth:"))
-            .or_else(|| s.strip_prefix("maxdepth:"))
-        {
-            if s.starts_with("d:")
-                && (rest.is_empty()
-                    || rest.starts_with('\\')
-                    || rest.starts_with('/')
-                    || rest.starts_with(':')
-                    || !rest.chars().all(|c| c.is_ascii_digit()))
+        // Traversal recursion depth limit: d:N (canonical)
+        if let Some(rest) = s.strip_prefix("d:") {
+            if rest.is_empty()
+                || rest.starts_with('\\')
+                || rest.starts_with('/')
+                || rest.starts_with(':')
+                || !rest.chars().all(|c| c.is_ascii_digit())
             {
                 // Not a numeric depth limit (e.g. Windows drive path like d:\foo or d::item), fall through
             } else {
@@ -1360,28 +1346,47 @@ impl DslParser {
                     .map_err(|_| format!("Expected a non-negative integer in '{s}'"));
             }
         }
-
-        // Per-file match count limit: m:N, top:N, limit:N
         if let Some(rest) = s
-            .strip_prefix("m:")
-            .or_else(|| s.strip_prefix("top:"))
-            .or_else(|| s.strip_prefix("limit:"))
+            .strip_prefix("depth:")
+            .or_else(|| s.strip_prefix("maxdepth:"))
         {
-            if (s.starts_with("m:") || s.starts_with("top:"))
-                && (rest.starts_with(':')
-                    || (s.starts_with("m:")
-                        && (rest.is_empty() || !rest.chars().all(|c| c.is_ascii_digit()))))
-            {
-                // Not a numeric limit (e.g. top::item or m:foo), fall through
+            let prefix = if s.starts_with("depth:") {
+                "depth:"
             } else {
-                return rest
-                    .parse::<usize>()
-                    .map(Token::MaxCount)
-                    .map_err(|_| format!("Expected a non-negative integer in '{s}'"));
-            }
+                "maxdepth:"
+            };
+            return Err(format!(
+                "Prefix '{prefix}{rest}' is deprecated. Use canonical 'd:{rest}' for traversal depth."
+            ));
         }
 
-        // Global head limit: head:N
+        // Per-file match count limit: max:N (canonical)
+        if let Some(rest) = s.strip_prefix("max:") {
+            return rest
+                .parse::<usize>()
+                .map(Token::MaxCount)
+                .map_err(|_| format!("Expected a non-negative integer in '{s}'"));
+        }
+        if let Some(rest) = s.strip_prefix("top:").or_else(|| s.strip_prefix("limit:")) {
+            let prefix = if s.starts_with("top:") {
+                "top:"
+            } else {
+                "limit:"
+            };
+            return Err(format!(
+                "'{prefix}{rest}' is ambiguous. Use 'head:{rest}' to limit total results globally, or 'max:{rest}' to limit matches per file."
+            ));
+        }
+        if let Some(rest) = s.strip_prefix("m:")
+            && !rest.is_empty()
+            && rest.chars().all(|c| c.is_ascii_digit())
+        {
+            return Err(format!(
+                "Prefix 'm:{rest}' has been consolidated. Use canonical 'max:{rest}' to limit matches per file."
+            ));
+        }
+
+        // Global head limit: head:N (canonical)
         if let Some(rest) = s.strip_prefix("head:") {
             if rest.starts_with(':') {
                 // E.g. head::new, fall through
@@ -1393,7 +1398,7 @@ impl DslParser {
             }
         }
 
-        // Tail match count limit: tail:N
+        // Tail match count limit: tail:N (canonical)
         if let Some(rest) = s.strip_prefix("tail:") {
             if rest.starts_with(':') {
                 // E.g. tail::new, fall through
@@ -1405,12 +1410,9 @@ impl DslParser {
             }
         }
 
-        // Unified context lines: ctx:N, context:N
-        if let Some(rest) = s
-            .strip_prefix("ctx:")
-            .or_else(|| s.strip_prefix("context:"))
-        {
-            if s.starts_with("ctx:") && rest.starts_with(':') {
+        // Unified context lines: ctx:N (canonical)
+        if let Some(rest) = s.strip_prefix("ctx:") {
+            if rest.starts_with(':') {
                 // E.g. ctx::current, fall through
             } else {
                 return rest
@@ -1419,16 +1421,15 @@ impl DslParser {
                     .map_err(|_| format!("Expected a non-negative integer in '{s}'"));
             }
         }
+        if let Some(rest) = s.strip_prefix("context:") {
+            return Err(format!(
+                "Prefix 'context:{rest}' is deprecated. Use canonical 'ctx:{rest}' for context lines."
+            ));
+        }
 
-        // Binary string extraction threshold: str:N, strings:N
-        if let Some(rest) = s
-            .strip_prefix("str:")
-            .or_else(|| s.strip_prefix("strings:"))
-        {
-            if s.starts_with("str:")
-                && (rest.is_empty()
-                    || rest.starts_with(':')
-                    || !rest.chars().all(|c| c.is_ascii_digit()))
+        // Binary string extraction threshold: str:N (canonical)
+        if let Some(rest) = s.strip_prefix("str:") {
+            if rest.is_empty() || rest.starts_with(':') || !rest.chars().all(|c| c.is_ascii_digit())
             {
                 // Not a numeric threshold (e.g. str::from_utf8 or "str::"), fall through
             } else {
@@ -1438,95 +1439,66 @@ impl DslParser {
                     .map_err(|_| format!("Expected a non-negative integer in '{s}'"));
             }
         }
+        if let Some(rest) = s.strip_prefix("strings:") {
+            return Err(format!(
+                "Prefix 'strings:{rest}' is deprecated. Use canonical 'str:{rest}'."
+            ));
+        }
 
-        // Result sort ordering: sort:key, sortr:key
-        if let Some(rest) = s.strip_prefix("sort:").or_else(|| s.strip_prefix("sortr:")) {
+        // Result sort ordering: sort:key, sort:-key
+        if let Some(rest) = s.strip_prefix("sort:") {
             if rest.is_empty() {
                 return Err("Expected sort key after sort:".into());
             }
-            let is_reversed = s.starts_with("sortr:") || rest.starts_with('-');
+            let is_reversed = rest.starts_with('-');
             let key_str = rest.trim_start_matches('-');
             let key = parse_sort_key(key_str, is_reversed)?;
             return Ok(Token::Sort(key));
         }
+        if let Some(rest) = s.strip_prefix("sortr:") {
+            return Err(format!(
+                "Prefix 'sortr:{rest}' is deprecated. Use canonical 'sort:-{rest}' to reverse sort."
+            ));
+        }
 
-        // Directory inclusion selector: "dir:..." or "directory:..."
+        // Directory inclusion selector (consolidated to kind:dir in:...)
         if let Some(rest) = s
             .strip_prefix("dir:")
             .or_else(|| s.strip_prefix("directory:"))
         {
-            let pats: Vec<String> = rest
-                .split(',')
-                .map(|p| p.trim().trim_end_matches(['/', '\\']).to_string())
-                .filter(|p| !p.is_empty())
-                .collect();
-            if pats.is_empty() {
-                return Err(format!("Expected directory pattern after '{s}'"));
-            }
             let prefix = if s.starts_with("dir:") {
                 "dir:"
             } else {
                 "directory:"
             };
-            for clean_rest in &pats {
-                if clean_rest.contains('/') || clean_rest.contains('\\') {
-                    eprintln!(
-                        "grx warning: '{prefix}{clean_rest}' contains a path separator; 'dir:' matches directory names only (e.g. 'dir:src'). Did you mean 'p:{clean_rest}' for directory paths?"
-                    );
-                }
-            }
-            return Ok(Token::DirInclude(pats));
+            return Err(format!(
+                "Prefix '{prefix}{rest}' has been consolidated. Use 'kind:dir in:{rest}' to discover directories named '{rest}', or 'p:{rest}' to target directory paths."
+            ));
         }
 
-        // File inclusion selector: "file:..."
+        // File inclusion selector (consolidated to kind:file in:...)
         if let Some(rest) = s.strip_prefix("file:") {
-            let pats: Vec<String> = rest
-                .split(',')
-                .map(|p| p.trim().to_string())
-                .filter(|p| !p.is_empty())
-                .collect();
-            if pats.is_empty() {
-                return Err(format!("Expected file pattern after '{s}'"));
-            }
-            for p in &pats {
-                if p.contains('/') || p.contains('\\') {
-                    eprintln!(
-                        "grx warning: 'file:{p}' contains a path separator; 'file:' matches file basenames only (e.g. 'file:main.rs'). Did you mean 'p:{p}' for paths?"
-                    );
-                }
-            }
-            return Ok(Token::FileInclude(pats));
+            return Err(format!(
+                "Prefix 'file:{rest}' has been consolidated. Use 'kind:file in:{rest}' to discover files named '{rest}'."
+            ));
         }
 
-        // Symlink inclusion selector: "link:..." or "symlink:..."
+        // Symlink inclusion selector (consolidated to kind:link in:...)
         if let Some(rest) = s
             .strip_prefix("link:")
             .or_else(|| s.strip_prefix("symlink:"))
         {
-            let pats: Vec<String> = rest
-                .split(',')
-                .map(|p| p.trim().to_string())
-                .filter(|p| !p.is_empty())
-                .collect();
-            if pats.is_empty() {
-                return Err(format!("Expected symlink pattern after '{s}'"));
-            }
             let prefix = if s.starts_with("link:") {
                 "link:"
             } else {
                 "symlink:"
             };
-            for p in &pats {
-                if p.contains('/') || p.contains('\\') {
-                    eprintln!(
-                        "grx warning: '{prefix}{p}' contains a path separator; 'link:' matches symlink names only (e.g. 'link:lib.so'). Did you mean 'p:{p}' for paths?"
-                    );
-                }
-            }
-            return Ok(Token::LinkInclude(pats));
+            return Err(format!(
+                "Prefix '{prefix}{rest}' has been consolidated. Use 'kind:link in:{rest}' to discover symlinks named '{rest}'."
+            ));
         }
 
-        // Explicit basename inclusion: "in:..."
+        // Explicit basename inclusion: "in:..." (canonical)
         if let Some(rest) = s.strip_prefix("in:") {
             if rest.is_empty() {
                 return Err("Expected pattern after in:".into());
@@ -1549,8 +1521,8 @@ impl DslParser {
             return Ok(Token::BasenameInclude(pats));
         }
 
-        // Explicit basename exclusion: "ni:..." or "not-in:..."
-        if let Some(rest) = s.strip_prefix("ni:").or_else(|| s.strip_prefix("not-in:")) {
+        // Explicit basename exclusion: "ni:..." (canonical)
+        if let Some(rest) = s.strip_prefix("ni:") {
             if rest.is_empty() {
                 return Err(format!("Expected pattern after '{s}'"));
             }
@@ -1562,23 +1534,23 @@ impl DslParser {
             if pats.is_empty() {
                 return Err(format!("Expected pattern after '{s}'"));
             }
-            let prefix = if s.starts_with("ni:") {
-                "ni:"
-            } else {
-                "not-in:"
-            };
             for pat in &pats {
                 if pat.contains('/') || pat.contains('\\') {
                     eprintln!(
-                        "grx warning: '{prefix}{pat}' contains a path separator; '{prefix}{pat}' excludes file basenames only (e.g. 'ni:test.rs'). Did you mean 'np:{pat}' for directories?"
+                        "grx warning: 'ni:{pat}' contains a path separator; 'ni:{pat}' excludes file basenames only (e.g. 'ni:test.rs'). Did you mean 'np:{pat}' for directories?"
                     );
                 }
             }
             return Ok(Token::BasenameExclude(pats));
         }
+        if let Some(rest) = s.strip_prefix("not-in:") {
+            return Err(format!(
+                "Prefix 'not-in:{rest}' is deprecated. Use canonical 'ni:{rest}' to exclude basenames."
+            ));
+        }
 
-        // Explicit file type inclusion: "t:..." or "type:..."
-        if let Some(rest) = s.strip_prefix("t:").or_else(|| s.strip_prefix("type:")) {
+        // Explicit file type inclusion: "t:..." (canonical)
+        if let Some(rest) = s.strip_prefix("t:") {
             let exts: Vec<String> = rest
                 .split(',')
                 .map(|e| e.trim().trim_start_matches('.').to_string())
@@ -1589,6 +1561,11 @@ impl DslParser {
             }
             return Ok(Token::TypeInclude(exts));
         }
+        if let Some(rest) = s.strip_prefix("type:") {
+            return Err(format!(
+                "Prefix 'type:{rest}' is deprecated. Use canonical 't:{rest}' to filter by file type."
+            ));
+        }
 
         // Filesystem entry kind constraint: "kind:file", "kind:dir", "kind:link", "kind:bin", "kind:text"
         if s.starts_with("kind:") {
@@ -1597,14 +1574,10 @@ impl DslParser {
         }
 
         // Shorthand kind selector: "bin:" or "binary:"
-        if let Some(rest) = s.strip_prefix("bin:").or_else(|| s.strip_prefix("binary:")) {
-            if rest.is_empty() {
-                return Ok(Token::Kind(EntryKind::Bin));
-            } else {
-                return Err(format!(
-                    "'{s}' has an unexpected attached value. Use 'bin: {rest}' or 'grx \"{rest}\" bin:' to search in binaries, or 'grx kind:bin' for discovery."
-                ));
-            }
+        if s.starts_with("bin:") || s.starts_with("binary:") {
+            return Err(format!(
+                "Prefix '{s}' has been consolidated. Use canonical 'kind:bin' to select binary files, or 'str:4' to search text in binaries."
+            ));
         }
 
         // File size predicates: "larger:...", "smaller:..."
@@ -1619,7 +1592,7 @@ impl DslParser {
             return Ok(Token::TimePredicate(pred));
         }
 
-        // Filesystem action operators: mv:<dest>, cp:<dest>, rm:, trash:
+        // Filesystem action operators: mv:<dest>, cp:<dest>, trash:
         if let Some(dest) = s.strip_prefix("mv:") {
             if dest.is_empty() {
                 return Err(format!("Expected destination directory after '{s}'"));
@@ -1636,14 +1609,19 @@ impl DslParser {
                 dest,
             ))));
         }
-        if let Some(rest) = s.strip_prefix("rm:").or_else(|| s.strip_prefix("trash:")) {
+        if let Some(rest) = s.strip_prefix("trash:") {
             if rest.is_empty() {
                 return Ok(Token::Action(crate::ops::ActionKind::Trash));
             } else {
                 return Err(format!(
-                    "'{s}' takes no value. To remove entries matching '{rest}', use: grx in:{rest} rm:"
+                    "'{s}' takes no value. To stage entries matching '{rest}' into trash, use: grx in:{rest} trash:"
                 ));
             }
+        }
+        if s.starts_with("rm:") {
+            return Err(
+                "Prefix 'rm:' has been consolidated. Use canonical 'trash:' to safely stage matching items into trash WAL.".into()
+            );
         }
         if let Some(rest) = s.strip_prefix("rename:") {
             let (pat, rep) = if let Some((p, r)) = rest.split_once('/') {
@@ -1672,8 +1650,8 @@ impl DslParser {
             return Ok(Token::DryRun);
         }
 
-        // Explicit path exclusions: "no-path:..." or "np:..." (e.g. `np:*steam*`, `no-path:SteamLibrary/`)
-        if let Some(rest) = s.strip_prefix("no-path:").or_else(|| s.strip_prefix("np:")) {
+        // Explicit path exclusions: "np:..." (canonical)
+        if let Some(rest) = s.strip_prefix("np:") {
             if rest.is_empty() {
                 return Err(format!("Expected path after '{s}'"));
             }
@@ -1687,9 +1665,14 @@ impl DslParser {
             }
             return Ok(Token::PathExclude(paths));
         }
+        if let Some(rest) = s.strip_prefix("no-path:") {
+            return Err(format!(
+                "Prefix 'no-path:{rest}' is deprecated. Use canonical 'np:{rest}' to exclude path."
+            ));
+        }
 
-        // Explicit path inclusions: "path:..." or "p:..." (e.g. `p:src/`, `path:crates/`)
-        if let Some(rest) = s.strip_prefix("path:").or_else(|| s.strip_prefix("p:")) {
+        // Explicit path inclusions: "p:..." (canonical)
+        if let Some(rest) = s.strip_prefix("p:") {
             if rest.is_empty() {
                 return Err(format!("Expected path after '{s}'"));
             }
@@ -1703,9 +1686,14 @@ impl DslParser {
             }
             return Ok(Token::PathInclude(paths));
         }
+        if let Some(rest) = s.strip_prefix("path:") {
+            return Err(format!(
+                "Prefix 'path:{rest}' is deprecated. Use canonical 'p:{rest}' to specify path."
+            ));
+        }
 
-        // Explicit file type exclusions: "no-type:..." or "nt:..." (e.g. `nt:rs`, `no-type:c,h`)
-        if let Some(rest) = s.strip_prefix("no-type:").or_else(|| s.strip_prefix("nt:")) {
+        // Explicit file type exclusions: "nt:..." (canonical)
+        if let Some(rest) = s.strip_prefix("nt:") {
             let exts: Vec<String> = rest
                 .split(',')
                 .map(|e| e.trim().trim_start_matches('.').to_string())
@@ -1716,73 +1704,73 @@ impl DslParser {
             }
             return Ok(Token::TypeExclude(exts));
         }
+        if let Some(rest) = s.strip_prefix("no-type:") {
+            return Err(format!(
+                "Prefix 'no-type:{rest}' is deprecated. Use canonical 'nt:{rest}' to exclude file type."
+            ));
+        }
 
-        // Explicit string/line content negation: "no-str:...", "no-string:...", "ns:..."
+        // Explicit string/line content negation: "ns:..." (canonical)
+        if let Some(rest) = s.strip_prefix("ns:") {
+            if rest.is_empty() {
+                return Err(format!("Expected string after '{s}'"));
+            }
+            let (is_whole, term) = if let Some(at) = rest.strip_prefix('@') {
+                (true, at)
+            } else {
+                (false, rest)
+            };
+            if term.is_empty() {
+                return Err(format!("Expected string after '{s}'"));
+            }
+            return Ok(Token::NegativeTerm(compile(term, is_whole)));
+        }
         if let Some(rest) = s
             .strip_prefix("no-str:")
             .or_else(|| s.strip_prefix("no-string:"))
-            .or_else(|| s.strip_prefix("ns:"))
         {
-            if rest.is_empty() {
-                return Err(format!("Expected string after '{s}'"));
-            }
-            let (is_whole, term) = if let Some(w) = rest.strip_prefix("w:") {
-                (true, w)
-            } else if let Some(at) = rest.strip_prefix('@') {
-                (true, at)
+            let prefix = if s.starts_with("no-str:") {
+                "no-str:"
             } else {
-                (false, rest)
+                "no-string:"
             };
-            if term.is_empty() {
-                return Err(format!("Expected string after '{s}'"));
-            }
-            return Ok(Token::NegativeTerm(compile(term, is_whole)));
+            return Err(format!(
+                "Prefix '{prefix}{rest}' is deprecated. Use canonical 'ns:{rest}' or boolean 'NOT {rest}' to exclude matching lines."
+            ));
         }
-
-        // Negative term rejection prefix: "not:..." (e.g. `grx auth not:debug`, `not:w:foo`, `not:@bar`)
         if let Some(rest) = s.strip_prefix("not:") {
-            if rest.is_empty() {
-                return Err(format!("Expected term after '{s}'"));
-            }
-            let (is_whole, term) = if let Some(w) = rest.strip_prefix("w:") {
-                (true, w)
-            } else if let Some(at) = rest.strip_prefix('@') {
-                (true, at)
-            } else {
-                (false, rest)
-            };
-            if term.is_empty() {
-                return Err(format!("Expected term after '{s}'"));
-            }
-            return Ok(Token::NegativeTerm(compile(term, is_whole)));
+            return Err(format!(
+                "Prefix 'not:{rest}' is deprecated. Use canonical 'ns:{rest}' or boolean 'NOT {rest}' to exclude matching lines."
+            ));
         }
 
-        // Whole-word term match: "w:term" or "@term"
-        if let Some(rest) = s.strip_prefix("w:") {
-            if rest.is_empty() {
-                return Err(format!("Expected term after '{s}'"));
-            }
-            return Ok(Token::Pattern(compile(rest, true)));
-        }
+        // Whole-word term match: "@term" (canonical)
         if let Some(rest) = s.strip_prefix('@') {
             if rest.is_empty() {
                 return Err(format!("Expected term after '{s}'"));
             }
             return Ok(Token::Pattern(compile(rest, true)));
         }
+        if let Some(rest) = s.strip_prefix("w:") {
+            return Err(format!(
+                "Prefix 'w:{rest}' is deprecated. Use canonical '@{rest}' for whole-word matching."
+            ));
+        }
 
-        // Filetype filters starting with ":"
+        // Deprecate ":ext" shorthand
         if let Some(rest) = s.strip_prefix(':')
             && !rest.is_empty()
+            && !rest.starts_with(':')
+            && !rest.contains('/')
+            && !rest.contains('\\')
+            && !rest.contains(' ')
+            && rest
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '+' || c == ',')
         {
-            let exts: Vec<String> = rest
-                .split(',')
-                .map(|e| e.trim().trim_start_matches('.').to_string())
-                .filter(|e| !e.is_empty())
-                .collect();
-            if !exts.is_empty() {
-                return Ok(Token::TypeInclude(exts));
-            }
+            return Err(format!(
+                "Prefix ':{rest}' is deprecated. Use canonical 't:{rest}' to filter by file type."
+            ));
         }
 
         // Long CLI options starting with "--"
@@ -1819,36 +1807,28 @@ impl DslParser {
             ));
         }
 
-        // Negative term starting with "-" (e.g. `-koseoglu`, `-w:test`, `-@test`)
-        if s.starts_with('-') && s.len() > 1 {
+        // Deprecate leading "-" for negative terms (e.g. `-koseoglu`)
+        if s.starts_with('-') && s.len() > 1 && !s.chars().skip(1).all(|c| c.is_ascii_digit()) {
             let rest = &s[1..];
-            let (is_whole, term) = if let Some(w) = rest.strip_prefix("w:") {
-                (true, w)
-            } else if let Some(at) = rest.strip_prefix('@') {
-                (true, at)
-            } else {
-                (false, rest)
-            };
-            return Ok(Token::NegativeTerm(compile(term, is_whole)));
+            return Err(format!(
+                "Leading '-' for negative terms is deprecated to prevent collisions with CLI flags. Use canonical 'ns:{rest}' or boolean 'NOT {rest}'."
+            ));
         }
 
-        // Positive term starting with "+" (e.g. `+required`, `+auth`, `+w:test`, `+@test`)
+        // Deprecate leading "+" for required terms
         if s.starts_with('+') && s.len() > 1 {
             let rest = &s[1..];
-            let (is_whole, term) = if let Some(w) = rest.strip_prefix("w:") {
-                (true, w)
-            } else if let Some(at) = rest.strip_prefix('@') {
-                (true, at)
-            } else {
-                (false, rest)
-            };
-            return Ok(Token::PositiveTerm(compile(term, is_whole)));
+            return Err(format!(
+                "Leading '+' for required terms ('{s}') is deprecated. In grx, multiple terms are required by default, or use boolean 'AND {rest}'."
+            ));
         }
 
         // Shell glob files like `*.rs` or `*.toml`
         if s.starts_with("*.") && s.len() > 2 && !s[2..].contains('/') && !s[2..].contains('\\') {
-            let ext = s[2..].to_string();
-            return Ok(Token::TypeInclude(vec![ext]));
+            let ext = &s[2..];
+            return Err(format!(
+                "Wildcard pattern '{s}' is shell-sensitive. Use canonical 't:{ext}' to filter by file type."
+            ));
         }
 
         // Quoted exact string literals or globs: "foo", 'foo', 'foo*bar', 'foo?bar'
@@ -1962,13 +1942,11 @@ impl DslParser {
         let p_lower = prefix.to_ascii_lowercase();
         match p_lower.as_str() {
             "ext" | "extension" | "extensions" => {
-                return Some(format!(
-                    "Did you mean 't:{val}' or ':{val}' for file type filtering?"
-                ));
+                return Some(format!("Did you mean 't:{val}' for file type filtering?"));
             }
             "pth" | "ptah" | "paht" => {
                 return Some(format!(
-                    "Did you mean 'p:{val}' or 'path:{val}' for directory or file root?"
+                    "Did you mean 'p:{val}' for directory or file root?"
                 ));
             }
             "name" | "filename" => {
@@ -1977,13 +1955,11 @@ impl DslParser {
                 ));
             }
             "typ" | "types" => {
-                return Some(format!(
-                    "Did you mean 't:{val}' or 'type:{val}' for file type filtering?"
-                ));
+                return Some(format!("Did you mean 't:{val}' for file type filtering?"));
             }
             "dirr" | "dirs" => {
                 return Some(format!(
-                    "Did you mean 'dir:{val}' for directory entry filtering?"
+                    "Did you mean 'kind:dir in:{val}' or 'p:{val}' for directory filtering?"
                 ));
             }
             "exclude" | "excludes" => {
@@ -1991,25 +1967,14 @@ impl DslParser {
                     "Did you mean 'np:{val}' (no-path) or 'nt:{val}' (no-type) for exclusions?"
                 ));
             }
-            "no-dir" | "nodir" => {
-                return Some(format!(
-                    "Did you mean 'np:{val}' or 'no-path:{val}' for directory exclusion?"
-                ));
-            }
-            "not-path" => {
-                return Some(format!(
-                    "Did you mean 'no-path:{val}' or 'np:{val}' for path exclusion?"
-                ));
+            "no-dir" | "nodir" | "not-path" => {
+                return Some(format!("Did you mean 'np:{val}' for path exclusion?"));
             }
             "not-type" => {
-                return Some(format!(
-                    "Did you mean 'no-type:{val}' or 'nt:{val}' for type exclusion?"
-                ));
+                return Some(format!("Did you mean 'nt:{val}' for type exclusion?"));
             }
             "not-str" | "not-string" => {
-                return Some(format!(
-                    "Did you mean 'no-str:{val}' or 'ns:{val}' for line exclusion?"
-                ));
+                return Some(format!("Did you mean 'ns:{val}' for line exclusion?"));
             }
             "mov" | "move" => {
                 return Some(format!(
@@ -2023,7 +1988,7 @@ impl DslParser {
             }
             "del" | "delete" | "remove" => {
                 return Some(
-                    "Did you mean 'rm:' or 'trash:' to safely remove matching items?".to_string(),
+                    "Did you mean 'trash:' to safely stage matching items into trash?".to_string(),
                 );
             }
             "head-limit" => {
@@ -2033,13 +1998,11 @@ impl DslParser {
             }
             "top-limit" => {
                 return Some(format!(
-                    "Did you mean 'top:{val}' or 'limit:{val}' for per-file match limits?"
+                    "Did you mean 'max:{val}' for per-file match limits, or 'head:{val}' for global limits?"
                 ));
             }
             "context-lines" => {
-                return Some(format!(
-                    "Did you mean 'ctx:{val}' or 'context:{val}' for context lines?"
-                ));
+                return Some(format!("Did you mean 'ctx:{val}' for context lines?"));
             }
             "size" | "sz" | "bytes" => {
                 return Some(format!(
@@ -2050,25 +2013,35 @@ impl DslParser {
         }
 
         const CANONICAL_PREFIXES: &[(&str, &str)] = &[
-            ("dir", "directory filtering (e.g. 'dir:src')"),
-            ("file", "file filtering (e.g. 'file:main.rs')"),
-            ("kind", "entry kind filtering (e.g. 'kind:dir')"),
-            (
-                "path",
-                "path root filtering (e.g. 'p:src/' or 'path:crates/')",
-            ),
+            ("t", "file type filtering (e.g. 't:rs')"),
+            ("nt", "file type exclusion (e.g. 'nt:c')"),
+            ("in", "entry basename filtering (e.g. 'in:report')"),
+            ("ni", "entry basename exclusion (e.g. 'ni:test')"),
+            ("kind", "entry kind filtering (e.g. 'kind:dir', 'kind:bin')"),
+            ("p", "path root filtering (e.g. 'p:src/')"),
+            ("np", "path exclusion (e.g. 'np:target/')"),
+            ("ns", "line string exclusion (e.g. 'ns:debug')"),
+            ("head", "global head limit (e.g. 'head:10')"),
+            ("tail", "global tail limit (e.g. 'tail:10')"),
+            ("max", "per-file match limit (e.g. 'max:5')"),
+            ("ctx", "context lines (e.g. 'ctx:3')"),
+            ("d", "traversal depth limit (e.g. 'd:1')"),
+            ("str", "binary strings extraction (e.g. 'str:4')"),
+            ("fz", "fuzzy token query (e.g. 'fz:foo,bar')"),
             ("near", "proximity search (e.g. 'near:3,main')"),
-            ("no-path", "path exclusion (e.g. 'np:target/')"),
-            ("no-type", "type exclusion (e.g. 'nt:c,h')"),
-            ("no-str", "line string exclusion (e.g. 'ns:debug')"),
+            (
+                "no-near",
+                "inverted proximity search (e.g. 'no-near:3,main')",
+            ),
             ("mv", "moving matching items into a directory"),
             ("cp", "copying matching items into a directory"),
-            ("rm", "safely removing matching items"),
             ("trash", "safely trashing matching items"),
             ("dry", "dry-run simulation"),
-            ("sort", "result sorting"),
+            ("sort", "result sorting (e.g. 'sort:size')"),
             ("larger", "file size filtering (e.g. 'larger:10M')"),
             ("smaller", "file size filtering (e.g. 'smaller:1K')"),
+            ("newer", "file age filtering (e.g. 'newer:7d')"),
+            ("older", "file age filtering (e.g. 'older:24h')"),
         ];
 
         let mut best: Option<(&str, &str, usize)> = None;
@@ -2570,35 +2543,41 @@ mod tests {
             vec!["missing"]
         );
         assert_eq!(
-            DslParser::parse(["needle", "no:rs"]).unwrap().type_excludes,
+            DslParser::parse(["needle", "nt:rs"]).unwrap().type_excludes,
             vec!["rs"]
         );
         assert_eq!(
-            DslParser::parse(["needle", "no:target/"])
+            DslParser::parse(["needle", "np:target/"])
                 .unwrap()
                 .path_excludes,
             vec!["target/"]
         );
         assert_eq!(
-            DslParser::parse(["needle", "no:target"])
+            DslParser::parse(["needle", "np:target"])
                 .unwrap()
                 .path_excludes,
             vec!["target"]
         );
         assert!(DslParser::parse(["needle", "only:src/"]).is_err());
-        let query = DslParser::parse(["needle", "-foo/bar"]).unwrap();
+        assert!(DslParser::parse(["needle", "no:rs"]).is_err());
+        assert!(DslParser::parse(["needle", "-foo/bar"]).is_err());
+        let query = DslParser::parse(["needle", "ns:foo/bar"]).unwrap();
         assert!(query.path_excludes.is_empty());
         assert!(matches!(query.expr, Some(QueryExpr::And(_, _))));
     }
 
     #[test]
     fn test_shorthand_exclamation_negation_and_numeric_prefix_fallback() {
-        // Exclamation directory shorthand: !target/
-        let q_dir = DslParser::parse(["needle", "!target/"]).unwrap();
+        // Exclamation directory shorthand: !target/ is deprecated
+        let err_dir = DslParser::parse(["needle", "!target/"]).unwrap_err();
+        assert!(err_dir.contains("Prefix '!target/' is deprecated and shell-sensitive"));
+        let q_dir = DslParser::parse(["needle", "np:target/"]).unwrap();
         assert_eq!(q_dir.path_excludes, vec!["target/"]);
 
-        // Exclamation extension shorthand: !*.min.js
-        let q_ext = DslParser::parse(["needle", "!*.min.js"]).unwrap();
+        // Exclamation extension shorthand: !*.min.js is deprecated
+        let err_ext = DslParser::parse(["needle", "!*.min.js"]).unwrap_err();
+        assert!(err_ext.contains("Prefix '!*.min.js' is deprecated and shell-sensitive"));
+        let q_ext = DslParser::parse(["needle", "nt:min.js"]).unwrap();
         assert_eq!(q_ext.type_excludes, vec!["min.js"]);
 
         // str:: identifier should parse as pattern, not fail with integer parse error
@@ -2674,7 +2653,7 @@ mod tests {
 
     #[test]
     fn test_parse_basic_dsl() {
-        let args = vec!["connect", ":rs", "no:target/"];
+        let args = vec!["connect", "t:rs", "np:target/"];
         let query = DslParser::parse(args).unwrap();
 
         assert_eq!(
@@ -2686,6 +2665,12 @@ mod tests {
         );
         assert_eq!(query.type_includes, vec!["rs"]);
         assert_eq!(query.path_excludes, vec!["target/"]);
+
+        // Deprecated forms error with clear guidance
+        let err_t = DslParser::parse(["connect", ":rs"]).unwrap_err();
+        assert!(err_t.contains("Prefix ':rs' is deprecated. Use canonical 't:rs'"));
+        let err_np = DslParser::parse(["connect", "no:target/"]).unwrap_err();
+        assert!(err_np.contains("Prefix 'no:target/' is deprecated. Use canonical 'np:target/'"));
     }
 
     #[test]
@@ -2703,7 +2688,7 @@ mod tests {
 
     #[test]
     fn test_parse_regex_and_globs() {
-        let args = vec!["/conn_[a-z]+/", "*.toml", "no:dist/,build/"];
+        let args = vec!["/conn_[a-z]+/", "t:toml", "np:dist/,build/"];
         let query = DslParser::parse(args).unwrap();
 
         assert_eq!(
@@ -2714,6 +2699,9 @@ mod tests {
         );
         assert_eq!(query.type_includes, vec!["toml"]);
         assert_eq!(query.path_excludes, vec!["dist/", "build/"]);
+
+        let err_glob = DslParser::parse(["/conn_[a-z]+/", "*.toml"]).unwrap_err();
+        assert!(err_glob.contains("Wildcard pattern '*.toml' is shell-sensitive"));
     }
 
     #[test]
@@ -2739,10 +2727,13 @@ mod tests {
 
     #[test]
     fn test_comma_separated_dir_selector() {
-        let args = vec!["dir:build,cache"];
+        let args = vec!["kind:dir", "in:build,cache"];
         let query = DslParser::parse(args).unwrap();
         assert_eq!(query.kind, Some(EntryKind::Dir));
         assert_eq!(query.basename_includes, vec!["build", "cache"]);
+
+        let err_dir = DslParser::parse(vec!["dir:build,cache"]).unwrap_err();
+        assert!(err_dir.contains("Prefix 'dir:build,cache' has been consolidated"));
     }
 
     #[test]
@@ -2791,19 +2782,28 @@ mod tests {
 
     #[test]
     fn test_parse_extension_excludes() {
-        let args = vec!["search_term", "nt:c,h", ":toml", "no:rs", "no:*.py"];
+        let args = vec!["search_term", "nt:c,h", "t:toml", "nt:rs", "nt:py"];
         let query = DslParser::parse(args).unwrap();
 
         assert_eq!(query.type_excludes, vec!["c", "h", "rs", "py"]);
         assert_eq!(query.type_includes, vec!["toml"]);
+
+        let err_colon = DslParser::parse(vec!["search_term", ":toml"]).unwrap_err();
+        assert!(err_colon.contains("Prefix ':toml' is deprecated"));
+
+        let err_no = DslParser::parse(vec!["search_term", "no:rs"]).unwrap_err();
+        assert!(err_no.contains("Unrecognized negation 'no:rs'. Use canonical 'nt:rs'"));
     }
 
     #[test]
     fn test_parse_glob_path_excludes() {
-        let args = vec!["search_term", "no:tar*", "no:engine?"];
+        let args = vec!["search_term", "np:tar*", "np:engine?"];
         let query = DslParser::parse(args).unwrap();
 
         assert_eq!(query.path_excludes, vec!["tar*", "engine?"]);
+
+        let err = DslParser::parse(vec!["search_term", "no:tar*"]).unwrap_err();
+        assert!(err.contains("Unrecognized negation 'no:tar*'"));
     }
 
     #[test]
@@ -2826,31 +2826,37 @@ mod tests {
         let q1 = DslParser::parse(vec!["foo", "yes:dots"]).unwrap();
         assert_eq!(q1.search_hidden, Some(true));
 
-        let q2 = DslParser::parse(vec!["foo", "yes:hidden"]).unwrap();
-        assert_eq!(q2.search_hidden, Some(true));
+        let err_hidden = DslParser::parse(vec!["foo", "yes:hidden"]).unwrap_err();
+        assert!(err_hidden.contains("Option 'yes:hidden' is deprecated"));
 
         let q3 = DslParser::parse(vec!["foo", "no:dots"]).unwrap();
         assert_eq!(q3.search_hidden, Some(false));
 
-        let q4 = DslParser::parse(vec!["foo", "no:hidden"]).unwrap();
-        assert_eq!(q4.search_hidden, Some(false));
+        let err_nohidden = DslParser::parse(vec!["foo", "no:hidden"]).unwrap_err();
+        assert!(err_nohidden.contains("Option 'no:hidden' is deprecated"));
 
-        // +dot and +bin must parse as positive content terms, not hidden/binary mode toggles
-        let q_pos = DslParser::parse(vec!["foo", "+dot", "+bin"]).unwrap();
-        assert_eq!(q_pos.search_hidden, None);
-        assert!(!q_pos.include_binaries);
+        let q_ign1 = DslParser::parse(vec!["foo", "yes:ignore"]).unwrap();
+        assert_eq!(q_ign1.respect_ignore, Some(true));
 
-        // -dot and not:bin must parse as negative content terms
-        let q_neg = DslParser::parse(vec!["foo", "-dot", "not:bin"]).unwrap();
-        assert_eq!(q_neg.search_hidden, None);
-        assert!(!q_neg.include_binaries);
+        let q_ign2 = DslParser::parse(vec!["foo", "no:ignore"]).unwrap();
+        assert_eq!(q_ign2.respect_ignore, Some(false));
+
+        // Deprecated forms error cleanly
+        assert!(DslParser::parse(vec!["foo", "+dot"]).is_err());
+        assert!(DslParser::parse(vec!["foo", "-dot"]).is_err());
+        assert!(DslParser::parse(vec!["foo", "not:bin"]).is_err());
     }
 
     #[test]
     fn test_parse_only_types_and_paths() {
-        let q = DslParser::parse(vec!["query", "only:rust", "p:src/"]).unwrap();
+        let q = DslParser::parse(vec!["query", "t:rust", "p:src/"]).unwrap();
         assert_eq!(q.type_includes, vec!["rust"]);
         assert_eq!(q.path_includes, vec!["src/"]);
+
+        let err_only = DslParser::parse(vec!["query", "only:rust"]).unwrap_err();
+        assert!(
+            err_only.contains("Prefix 'only:rust' has been consolidated. Use canonical 't:rust'")
+        );
 
         let q2 = DslParser::parse(vec!["query", "in:report"]).unwrap();
         assert_eq!(q2.basename_includes, vec!["report"]);
@@ -2859,7 +2865,7 @@ mod tests {
     #[test]
     fn test_parse_negative_and_positive_terms() {
         // Line must contain "alpha", but not "beta"
-        let q1 = DslParser::parse(vec!["alpha", "-beta"]).unwrap();
+        let q1 = DslParser::parse(vec!["alpha", "ns:beta"]).unwrap();
         let expected = QueryExpr::And(
             Box::new(QueryExpr::Pattern(SearchPattern::Literal {
                 text: "alpha".to_string(),
@@ -2872,10 +2878,14 @@ mod tests {
                 },
             )))),
         );
-        assert_eq!(q1.expr, Some(expected));
+        assert_eq!(q1.expr, Some(expected.clone()));
 
-        // +alpha +gamma parsed as alpha AND gamma
-        let q2 = DslParser::parse(vec!["+alpha", "+gamma"]).unwrap();
+        // Boolean: alpha NOT beta
+        let q1_bool = DslParser::parse(vec!["alpha", "NOT", "beta"]).unwrap();
+        assert_eq!(q1_bool.expr, Some(expected));
+
+        // Boolean: alpha AND gamma
+        let q2 = DslParser::parse(vec!["alpha", "AND", "gamma"]).unwrap();
         let expected_and = QueryExpr::And(
             Box::new(QueryExpr::Pattern(SearchPattern::Literal {
                 text: "alpha".to_string(),
@@ -2888,21 +2898,30 @@ mod tests {
         );
         assert_eq!(q2.expr, Some(expected_and));
 
-        // not:beta prefix
-        let q3 = DslParser::parse(vec!["alpha", "not:beta"]).unwrap();
-        assert_eq!(q3.expr, q1.expr);
+        // Deprecated forms error with migration guidance
+        let err_neg = DslParser::parse(vec!["alpha", "-beta"]).unwrap_err();
+        assert!(err_neg.contains("Leading '-' for negative terms is deprecated"));
+        let err_pos = DslParser::parse(vec!["+alpha", "+gamma"]).unwrap_err();
+        assert!(err_pos.contains("Leading '+' for required terms"));
+        let err_not = DslParser::parse(vec!["alpha", "not:beta"]).unwrap_err();
+        assert!(err_not.contains("Prefix 'not:beta' is deprecated"));
     }
 
     #[test]
     fn test_parse_feature_toggles() {
-        let q = DslParser::parse(vec!["foo", "yes:bin", "yes:case", "yes:cache"]).unwrap();
+        let q = DslParser::parse(vec!["foo", "kind:bin", "yes:case", "yes:cache"]).unwrap();
         assert!(q.include_binaries);
         assert_eq!(q.case_sensitive, Some(true));
         assert!(q.search_cache);
 
-        let q2 = DslParser::parse(vec!["foo", "no:bin", "no:case"]).unwrap();
+        let q2 = DslParser::parse(vec!["foo", "kind:text", "no:case"]).unwrap();
         assert!(!q2.include_binaries);
         assert_eq!(q2.case_sensitive, Some(false));
+
+        let err_yesbin = DslParser::parse(vec!["foo", "yes:bin"]).unwrap_err();
+        assert!(err_yesbin.contains("'yes:bin' is deprecated"));
+        let err_nobin = DslParser::parse(vec!["foo", "no:bin"]).unwrap_err();
+        assert!(err_nobin.contains("'no:bin' is deprecated"));
     }
 
     #[test]
@@ -2918,7 +2937,7 @@ mod tests {
             })),
         );
         let q = DslParser::parse_with_external_expr(
-            vec!["src/", ":rs", "no:target/"],
+            vec!["src/", "t:rs", "np:target/"],
             Some(ext.clone()),
         )
         .unwrap();
@@ -2930,7 +2949,7 @@ mod tests {
 
     #[test]
     fn test_parse_depth_limit_context_and_strings() {
-        let q = DslParser::parse(vec!["foo", "d:0", "top:15", "ctx:3", "str:8", "p:src/"]).unwrap();
+        let q = DslParser::parse(vec!["foo", "d:0", "max:15", "ctx:3", "str:8", "p:src/"]).unwrap();
 
         assert_eq!(q.max_depth, Some(0));
         assert_eq!(q.max_count, Some(15));
@@ -2939,19 +2958,21 @@ mod tests {
         assert!(q.include_binaries);
         assert_eq!(q.path_includes, vec!["src/"]);
 
-        let q2 = DslParser::parse(vec![
-            "bar",
-            "depth:2",
-            "limit:100",
-            "context:5",
-            "strings:16",
-        ])
-        .unwrap();
-        assert_eq!(q2.max_depth, Some(2));
-        assert_eq!(q2.max_count, Some(100));
-        assert_eq!(q2.context, Some(5));
-        assert_eq!(q2.binary_strings_min_len, Some(16));
-        assert!(q2.include_binaries);
+        // Deprecated forms error with guidance
+        let err_top = DslParser::parse(vec!["top:15"]).unwrap_err();
+        assert!(err_top.contains("'top:15' is ambiguous"));
+
+        let err_depth = DslParser::parse(vec!["depth:2"]).unwrap_err();
+        assert!(err_depth.contains("Prefix 'depth:2' is deprecated"));
+
+        let err_limit = DslParser::parse(vec!["limit:100"]).unwrap_err();
+        assert!(err_limit.contains("'limit:100' is ambiguous"));
+
+        let err_context = DslParser::parse(vec!["context:5"]).unwrap_err();
+        assert!(err_context.contains("Prefix 'context:5' is deprecated"));
+
+        let err_strings = DslParser::parse(vec!["strings:16"]).unwrap_err();
+        assert!(err_strings.contains("Prefix 'strings:16' is deprecated"));
     }
 
     #[test]
@@ -2999,15 +3020,7 @@ mod tests {
             )))
         );
 
-        // Whole-word: w: and @
-        let q6 = DslParser::parse(vec!["w:test"]).unwrap();
-        assert_eq!(
-            q6.expr,
-            Some(QueryExpr::Pattern(SearchPattern::Regex(
-                r"(?i)\btest\b".to_string()
-            )))
-        );
-
+        // Whole-word: @ is canonical, w: is deprecated
         let q7 = DslParser::parse(vec!["@Test"]).unwrap();
         assert_eq!(
             q7.expr,
@@ -3015,6 +3028,9 @@ mod tests {
                 r"\bTest\b".to_string()
             )))
         );
+
+        let err_w = DslParser::parse(vec!["w:test"]).unwrap_err();
+        assert!(err_w.contains("Prefix 'w:test' is deprecated. Use canonical '@test'"));
 
         // Wildcard .. with trailing target path (including nonexistent path and parent directory ..)
         let q_wc_target = DslParser::parse(vec!["foo..bar", "nonexistent_target.txt"]).unwrap();
@@ -3047,8 +3063,8 @@ mod tests {
             )))
         );
 
-        // Negative whole-word
-        let q9 = DslParser::parse(vec!["query", "-@test"]).unwrap();
+        // Negative whole-word via canonical ns:@test
+        let q9 = DslParser::parse(vec!["query", "ns:@test"]).unwrap();
         let expected_neg = QueryExpr::And(
             Box::new(QueryExpr::Pattern(SearchPattern::Literal {
                 text: "query".to_string(),
@@ -3059,6 +3075,9 @@ mod tests {
             )))),
         );
         assert_eq!(q9.expr, Some(expected_neg));
+
+        // Leading -@test is deprecated
+        assert!(DslParser::parse(vec!["query", "-@test"]).is_err());
     }
 
     #[test]
@@ -3176,20 +3195,26 @@ mod tests {
 
     #[test]
     fn test_parse_explicit_no_path_and_no_str_prefixes() {
-        // no-path: and np:
-        let q1 = DslParser::parse(vec!["needle", "no-path:*steam*", "np:target/"]).unwrap();
+        // np: is canonical, no-path: is deprecated
+        let q1 = DslParser::parse(vec!["needle", "np:*steam*", "np:target/"]).unwrap();
         assert_eq!(q1.path_excludes, vec!["*steam*", "target/"]);
+        let err_nopath = DslParser::parse(vec!["needle", "no-path:*steam*"]).unwrap_err();
+        assert!(err_nopath.contains("Prefix 'no-path:*steam*' is deprecated"));
 
-        // path: and p:
-        let q2 = DslParser::parse(vec!["needle", "path:src/", "p:crates/"]).unwrap();
+        // p: is canonical, path: is deprecated
+        let q2 = DslParser::parse(vec!["needle", "p:src/", "p:crates/"]).unwrap();
         assert_eq!(q2.path_includes, vec!["src/", "crates/"]);
+        let err_path = DslParser::parse(vec!["needle", "path:src/"]).unwrap_err();
+        assert!(err_path.contains("Prefix 'path:src/' is deprecated"));
 
-        // no-type: and nt:
-        let q3 = DslParser::parse(vec!["needle", "no-type:c,h", "nt:rs"]).unwrap();
+        // nt: is canonical, no-type: is deprecated
+        let q3 = DslParser::parse(vec!["needle", "nt:c,h", "nt:rs"]).unwrap();
         assert_eq!(q3.type_excludes, vec!["c", "h", "rs"]);
+        let err_notype = DslParser::parse(vec!["needle", "no-type:c,h"]).unwrap_err();
+        assert!(err_notype.contains("Prefix 'no-type:c,h' is deprecated"));
 
-        // no-str: and ns: (content negation on lines, including slashes)
-        let q4 = DslParser::parse(vec!["needle", "no-str:Steam/", "ns:foo"]).unwrap();
+        // ns: is canonical, no-str: is deprecated
+        let q4 = DslParser::parse(vec!["needle", "ns:Steam/", "ns:foo"]).unwrap();
         let expected = QueryExpr::And(
             Box::new(QueryExpr::And(
                 Box::new(QueryExpr::Pattern(SearchPattern::Literal {
@@ -3211,6 +3236,8 @@ mod tests {
             )))),
         );
         assert_eq!(q4.expr, Some(expected));
+        let err_nostr = DslParser::parse(vec!["needle", "no-str:Steam/"]).unwrap_err();
+        assert!(err_nostr.contains("Prefix 'no-str:Steam/' is deprecated"));
     }
 
     #[test]
@@ -3226,8 +3253,8 @@ mod tests {
         );
         assert!(q1.expr.is_some());
 
-        // Snake_case fuzzy query via %% shortcut
-        let q2 = DslParser::parse(vec!["%%from_ptr_err"]).unwrap();
+        // Snake_case fuzzy query via canonical fz:
+        let q2 = DslParser::parse(vec!["fz:from_ptr_err"]).unwrap();
         assert_eq!(
             q2.fuzzy,
             Some(FuzzyQuery {
@@ -3236,8 +3263,8 @@ mod tests {
             })
         );
 
-        // CamelCase fuzzy query
-        let q3 = DslParser::parse(vec!["%%fromPtrErr"]).unwrap();
+        // CamelCase fuzzy query via canonical fz:
+        let q3 = DslParser::parse(vec!["fz:fromPtrErr"]).unwrap();
         assert_eq!(
             q3.fuzzy,
             Some(FuzzyQuery {
@@ -3247,7 +3274,7 @@ mod tests {
         );
 
         // CamelCase with acronym sequences
-        let q_acronym = DslParser::parse(vec!["%%XMLReader"]).unwrap();
+        let q_acronym = DslParser::parse(vec!["fz:XMLReader"]).unwrap();
         assert_eq!(
             q_acronym.fuzzy,
             Some(FuzzyQuery {
@@ -3256,7 +3283,7 @@ mod tests {
             })
         );
 
-        let q_http = DslParser::parse(vec!["%%HTTPServer"]).unwrap();
+        let q_http = DslParser::parse(vec!["fz:HTTPServer"]).unwrap();
         assert_eq!(
             q_http.fuzzy,
             Some(FuzzyQuery {
@@ -3272,15 +3299,19 @@ mod tests {
             vec!["\"\"".to_string(), "from".to_string(), "ptr".to_string()]
         );
 
-        // Empty fuzzy argument (e.g. unquoted %%"") returns helpful error
-        let err1 = DslParser::parse(vec!["%%"]).unwrap_err();
-        assert!(err1.contains("empty argument"));
-        assert!(err1.contains("shell stripped them"));
+        // Deprecated %% prefix returns helpful error
+        let err_pct = DslParser::parse(vec!["%%from_ptr_err"]).unwrap_err();
+        assert!(err_pct.contains(
+            "Fuzzy prefix in '%%from_ptr_err' is deprecated. Use canonical 'fz:from_ptr_err'"
+        ));
 
-        // Empty token inside comma list (e.g. unquoted %%" ",from,ptr) returns helpful error
-        let err2 = DslParser::parse(vec!["%%,from,ptr"]).unwrap_err();
+        // Empty fuzzy argument (e.g. unquoted fz:"") returns helpful error
+        let err1 = DslParser::parse(vec!["fz:"]).unwrap_err();
+        assert!(err1.contains("empty argument"));
+
+        // Empty token inside comma list
+        let err2 = DslParser::parse(vec!["fz:,from,ptr"]).unwrap_err();
         assert!(err2.contains("empty token"));
-        assert!(err2.contains("shell stripped them"));
     }
 
     #[test]
@@ -3432,10 +3463,13 @@ mod tests {
 
     #[test]
     fn test_basename_excludes_ni() {
-        let q = DslParser::parse(vec!["in:report", "ni:temp", "not-in:*.bak"]).unwrap();
+        let q = DslParser::parse(vec!["in:report", "ni:temp", "ni:*.bak"]).unwrap();
         assert_eq!(q.basename_includes, vec!["report"]);
         assert_eq!(q.basename_excludes, vec!["temp", "*.bak"]);
         assert_eq!(q.basename_exclude_filters.len(), 2);
+
+        let err = DslParser::parse(vec!["not-in:*.bak"]).unwrap_err();
+        assert!(err.contains("Prefix 'not-in:*.bak' is deprecated"));
     }
 
     #[test]
@@ -3443,8 +3477,8 @@ mod tests {
         let q1 = DslParser::parse(vec!["t:rs"]).unwrap();
         assert_eq!(q1.type_includes, vec!["rs"]);
 
-        let q2 = DslParser::parse(vec!["type:toml"]).unwrap();
-        assert_eq!(q2.type_includes, vec!["toml"]);
+        let err_type = DslParser::parse(vec!["type:toml"]).unwrap_err();
+        assert!(err_type.contains("Prefix 'type:toml' is deprecated. Use canonical 't:toml'"));
 
         let q3 = DslParser::parse(vec!["t:rs,c,cpp"]).unwrap();
         assert_eq!(q3.type_includes, vec!["rs", "c", "cpp"]);
@@ -3466,10 +3500,8 @@ mod tests {
         assert!(q_bin.include_binaries);
         assert!(q_bin.only_binaries);
 
-        let q_bin_shorthand = DslParser::parse(vec!["bin:"]).unwrap();
-        assert_eq!(q_bin_shorthand.kind, Some(EntryKind::Bin));
-        assert!(q_bin_shorthand.include_binaries);
-        assert!(q_bin_shorthand.only_binaries);
+        let err_bin = DslParser::parse(vec!["bin:"]).unwrap_err();
+        assert!(err_bin.contains("Prefix 'bin:' has been consolidated. Use canonical 'kind:bin'"));
 
         let q_text = DslParser::parse(vec!["kind:text"]).unwrap();
         assert_eq!(q_text.kind, Some(EntryKind::Text));
@@ -3570,27 +3602,34 @@ mod tests {
 
     #[test]
     fn test_dir_file_link_selectors() {
-        let q_dir = DslParser::parse(vec!["dir:src"]).unwrap();
+        let err_dir = DslParser::parse(vec!["dir:src"]).unwrap_err();
+        assert!(err_dir.contains("Prefix 'dir:src' has been consolidated. Use 'kind:dir in:src'"));
+
+        let err_file = DslParser::parse(vec!["file:main.rs"]).unwrap_err();
+        assert!(
+            err_file.contains(
+                "Prefix 'file:main.rs' has been consolidated. Use 'kind:file in:main.rs'"
+            )
+        );
+
+        let err_link = DslParser::parse(vec!["link:lib.so"]).unwrap_err();
+        assert!(
+            err_link
+                .contains("Prefix 'link:lib.so' has been consolidated. Use 'kind:link in:lib.so'")
+        );
+
+        let q_dir = DslParser::parse(vec!["kind:dir", "in:src"]).unwrap();
         assert_eq!(q_dir.kind, Some(EntryKind::Dir));
         assert_eq!(q_dir.basename_includes, vec!["src"]);
         assert!(q_dir.is_discovery());
 
-        let q_dir_exact = DslParser::parse(vec!["dir:=src", "np:data"]).unwrap();
-        assert_eq!(q_dir_exact.kind, Some(EntryKind::Dir));
-        assert_eq!(q_dir_exact.basename_includes, vec!["=src"]);
-        assert_eq!(q_dir_exact.path_excludes, vec!["data"]);
-
-        let q_file = DslParser::parse(vec!["file:main.rs"]).unwrap();
+        let q_file = DslParser::parse(vec!["kind:file", "in:main.rs"]).unwrap();
         assert_eq!(q_file.kind, Some(EntryKind::File));
         assert_eq!(q_file.basename_includes, vec!["main.rs"]);
 
-        let q_link = DslParser::parse(vec!["link:lib.so"]).unwrap();
+        let q_link = DslParser::parse(vec!["kind:link", "in:lib.so"]).unwrap();
         assert_eq!(q_link.kind, Some(EntryKind::Link));
         assert_eq!(q_link.basename_includes, vec!["lib.so"]);
-
-        // Conflicting kind selectors error
-        let err = DslParser::parse(vec!["dir:src", "kind:file"]).unwrap_err();
-        assert!(err.contains("Conflicting kind filters"));
     }
 
     #[test]
@@ -3600,20 +3639,23 @@ mod tests {
         assert_eq!(q_head.max_count, None);
         assert_eq!(q_head.tail, None);
 
-        let q_m = DslParser::parse(vec!["in:test", "m:3"]).unwrap();
+        let q_m = DslParser::parse(vec!["in:test", "max:3"]).unwrap();
         assert_eq!(q_m.max_count, Some(3));
         assert_eq!(q_m.head, None);
         assert_eq!(q_m.tail, None);
 
-        let q_tail = DslParser::parse(vec!["dir:src", "tail:10"]).unwrap();
+        let err_m = DslParser::parse(vec!["in:test", "m:3"]).unwrap_err();
+        assert!(err_m.contains("Prefix 'm:3' has been consolidated. Use canonical 'max:3'"));
+
+        let q_tail = DslParser::parse(vec!["kind:dir", "in:src", "tail:10"]).unwrap();
         assert_eq!(q_tail.tail, Some(10));
         assert_eq!(q_tail.head, None);
         assert_eq!(q_tail.max_count, None);
 
-        let err = DslParser::parse(vec!["dir:src", "head:5", "tail:10"]).unwrap_err();
+        let err = DslParser::parse(vec!["kind:dir", "in:src", "head:5", "tail:10"]).unwrap_err();
         assert!(err.contains("Cannot specify both 'head'"));
 
-        let err2 = DslParser::parse(vec!["in:test", "limit:5", "tail:10"]).unwrap_err();
+        let err2 = DslParser::parse(vec!["in:test", "head:5", "tail:10"]).unwrap_err();
         assert!(err2.contains("Cannot specify both 'head'"));
     }
 
@@ -3625,16 +3667,18 @@ mod tests {
         let q_size_rev = DslParser::parse(vec!["in:test", "sort:-size"]).unwrap();
         assert_eq!(q_size_rev.sort, Some(SortKey::SizeDesc));
 
-        let q_sortr = DslParser::parse(vec!["in:test", "sortr:size"]).unwrap();
-        assert_eq!(q_sortr.sort, Some(SortKey::SizeDesc));
+        let err_sortr = DslParser::parse(vec!["in:test", "sortr:size"]).unwrap_err();
+        assert!(
+            err_sortr.contains("Prefix 'sortr:size' is deprecated. Use canonical 'sort:-size'")
+        );
 
-        let q_mod = DslParser::parse(vec!["dir:src", "sort:modified"]).unwrap();
+        let q_mod = DslParser::parse(vec!["kind:dir", "in:src", "sort:modified"]).unwrap();
         assert_eq!(q_mod.sort, Some(SortKey::Modified));
 
-        let q_newest = DslParser::parse(vec!["dir:src", "sort:newest"]).unwrap();
+        let q_newest = DslParser::parse(vec!["kind:dir", "in:src", "sort:newest"]).unwrap();
         assert_eq!(q_newest.sort, Some(SortKey::Modified));
 
-        let q_oldest = DslParser::parse(vec!["dir:src", "sort:oldest"]).unwrap();
+        let q_oldest = DslParser::parse(vec!["kind:dir", "in:src", "sort:oldest"]).unwrap();
         assert_eq!(q_oldest.sort, Some(SortKey::ModifiedDesc));
 
         let q_len = DslParser::parse(vec!["in:test", "sort:len"]).unwrap();
@@ -3674,22 +3718,22 @@ mod tests {
         let err_teq = DslParser::parse(vec!["hit", "-t=rs"]).unwrap_err();
         assert!(err_teq.contains("CLI flag '-t=rs' was placed after positional search arguments"));
 
-        // Legitimate negative term containing non-flag chars is permitted
-        let q_neg = DslParser::parse(vec!["hit", "-koseoglu"]).unwrap();
-        assert!(q_neg.expr.is_some());
+        // Leading '-' negative terms error with clear guidance
+        let err_neg = DslParser::parse(vec!["hit", "-koseoglu"]).unwrap_err();
+        assert!(err_neg.contains("Leading '-' for negative terms is deprecated"));
+        assert!(err_neg.contains("Use canonical 'ns:koseoglu'"));
 
-        let q_debug = DslParser::parse(vec!["hit", "-debug"]).unwrap();
-        assert!(q_debug.expr.is_some());
-
-        // Explicit negative whole-word syntax with flag-like name is permitted
-        let q_neg_at = DslParser::parse(vec!["hit", "-@m1"]).unwrap();
-        assert!(q_neg_at.expr.is_some());
+        let err_debug = DslParser::parse(vec!["hit", "-debug"]).unwrap_err();
+        assert!(err_debug.contains("Leading '-' for negative terms is deprecated"));
+        assert!(err_debug.contains("Use canonical 'ns:debug'"));
 
         // Explicit ns: negation is permitted
         let q_ns = DslParser::parse(vec!["hit", "ns:F"]).unwrap();
         assert!(q_ns.expr.is_some());
         let q_ns_m1 = DslParser::parse(vec!["hit", "ns:m1"]).unwrap();
         assert!(q_ns_m1.expr.is_some());
+        let q_ns_kose = DslParser::parse(vec!["hit", "ns:koseoglu"]).unwrap();
+        assert!(q_ns_kose.expr.is_some());
     }
 
     #[test]
@@ -3782,7 +3826,7 @@ mod tests {
 
         let err5 = DslParser::parse(vec!["needle", "dr:src"]).unwrap_err();
         assert!(err5.contains("Unrecognized filter prefix 'dr:'"));
-        assert!(err5.contains("Did you mean 'dir:src'"));
+        assert!(err5.contains("Did you mean 'd:src'"));
 
         // Standalone proximity operator diagnostics
         let err_near = DslParser::parse(vec!["near:3,foo"]).unwrap_err();
@@ -3860,7 +3904,7 @@ mod tests {
 
     #[test]
     fn test_inline_actions_and_dry_run_dsl() {
-        let q_mv = DslParser::parse(vec!["dir:cpp", "d:1", "mv:cpp-projects/"]).unwrap();
+        let q_mv = DslParser::parse(vec!["kind:dir", "in:cpp", "d:1", "mv:cpp-projects/"]).unwrap();
         assert_eq!(
             q_mv.action,
             Some(crate::ops::ActionKind::Move(PathBuf::from("cpp-projects/")))
@@ -3874,8 +3918,8 @@ mod tests {
         );
         assert!(q_cp_dry.dry_run);
 
-        let q_rm = DslParser::parse(vec!["in:temp", "rm:"]).unwrap();
-        assert_eq!(q_rm.action, Some(crate::ops::ActionKind::Trash));
+        let err_rm = DslParser::parse(vec!["in:temp", "rm:"]).unwrap_err();
+        assert!(err_rm.contains("Prefix 'rm:' has been consolidated. Use canonical 'trash:'"));
 
         let q_trash = DslParser::parse(vec!["in:temp", "trash:", "--dry-run"]).unwrap();
         assert_eq!(q_trash.action, Some(crate::ops::ActionKind::Trash));
@@ -3900,10 +3944,6 @@ mod tests {
         let err_multi = DslParser::parse(vec!["in:test", "mv:a/", "cp:b/"]).unwrap_err();
         assert!(err_multi.contains("Multiple file actions specified"));
 
-        // rm: with argument suggests in:<arg> rm:
-        let err_rm_val = DslParser::parse(vec!["rm:junk"]).unwrap_err();
-        assert!(err_rm_val.contains("'rm:junk' takes no value"));
-
         // Typo suggestions for actions
         let err_mov = DslParser::parse(vec!["mov:dest/"]).unwrap_err();
         assert!(err_mov.contains("Did you mean 'mv:dest/'"));
@@ -3914,12 +3954,15 @@ mod tests {
         let mut cfg = crate::config::Config::default();
         cfg.types
             .insert("proto".to_string(), vec!["*.proto".to_string()]);
-        let tok = DslParser::classify_token_with_config("no:proto", Some(&cfg)).unwrap();
+        let tok = DslParser::classify_token_with_config("nt:proto", Some(&cfg)).unwrap();
         assert_eq!(tok, Token::TypeExclude(vec!["proto".to_string()]));
 
-        // Without custom config, "proto" is treated as a path exclusion
-        let tok_default = DslParser::classify_token_with_config("no:proto", None).unwrap();
-        assert_eq!(tok_default, Token::PathExclude(vec!["proto".to_string()]));
+        let tok_path = DslParser::classify_token_with_config("np:proto", Some(&cfg)).unwrap();
+        assert_eq!(tok_path, Token::PathExclude(vec!["proto".to_string()]));
+
+        // Legacy polymorphic no:proto is rejected with migration error
+        let err_no = DslParser::classify_token_with_config("no:proto", Some(&cfg)).unwrap_err();
+        assert!(err_no.contains("Unrecognized negation 'no:proto'. Use canonical 'nt:proto'"));
     }
 
     #[test]

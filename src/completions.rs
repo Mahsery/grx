@@ -14,93 +14,29 @@ complete -c grx -f
 function __grx_complete_dsl
     set -l token (commandline -ct)
 
-    # 1. Symlink selectors: link:, symlink:
-    if string match -rq '^link:(?<val>.*)' -- $token
-        for f in $val*
-            test -L "$f" && printf "link:%s\tSymbolic link\n" "$f"
-        end
-        return 0
-    else if string match -rq '^symlink:(?<val>.*)' -- $token
-        for f in $val*
-            test -L "$f" && printf "symlink:%s\tSymbolic link\n" "$f"
-        end
-        return 0
-    # 2. Directory selectors: dir:, directory:
-    else if string match -rq '^dir:(?<val>.*)' -- $token
-        for d in $val*/
-            if test -d "$d"
-                set -l clean (string replace -r '^\./' '' "$d" | string replace -r '/$' '')
-                not string match -rq '^\.\.?$' "$clean" && printf "dir:%s\tDirectory\n" "$clean"
-            end
-        end
-        return 0
-    else if string match -rq '^directory:(?<val>.*)' -- $token
-        for d in $val*/
-            if test -d "$d"
-                set -l clean (string replace -r '^\./' '' "$d" | string replace -r '/$' '')
-                not string match -rq '^\.\.?$' "$clean" && printf "directory:%s\tDirectory\n" "$clean"
-            end
-        end
-        return 0
-    # 3. File selector: file:
-    else if string match -rq '^file:(?<val>.*)' -- $token
-        for f in $val*
-            test -f "$f" && printf "file:%s\tRegular file\n" "$f"
-        end
-        return 0
-    # 4. Path selectors: p:, path:
-    else if string match -rq '^p:(?<val>.*)' -- $token
+    # 1. Starting path: p:
+    if string match -rq '^p:(?<val>.*)' -- $token
         for p in $val*
             test -e "$p" && printf "p:%s\tStarting path\n" "$p"
         end
         return 0
-    else if string match -rq '^path:(?<val>.*)' -- $token
-        for p in $val*
-            test -e "$p" && printf "path:%s\tStarting path\n" "$p"
-        end
-        return 0
-    # 5. Exclude path: np:, no-path:
+    # 2. Exclude path: np:
     else if string match -rq '^np:(?<val>.*)' -- $token
         for d in $val*/
             test -d "$d" && printf "np:%s\tExclude directory\n" "$d"
         end
         return 0
-    else if string match -rq '^no-path:(?<val>.*)' -- $token
-        for d in $val*/
-            test -d "$d" && printf "no-path:%s\tExclude directory\n" "$d"
-        end
-        return 0
-    # 6. Exclude directory or extension: no:
-    else if string match -rq '^no:(?<val>.*)' -- $token
-        for d in $val*/
-            test -d "$d" && printf "no:%s\tExclude directory\n" "$d"
-        end
-        for ext in rs rust c cpp c++ py python go golang js javascript ts typescript toml json yaml yml md markdown sh shell bash fish zsh java kotlin kt zig lua sql html css txt web code data doc
-            string match -q "$val*" -- $ext && printf "no:%s\tExclude file extension\n" "$ext"
-        end
-        return 0
-    # 7. Sort keys: sort:, sortr:
+    # 3. Sort keys: sort:
     else if string match -rq '^sort:(?<val>.*)' -- $token
-        set -l keys size bytes largest smallest modified time age date newest recent oldest path name len length path-len line-len linelen shortest longest line line-num linenum count -size -modified -len -count
+        set -l keys size -size bytes largest smallest modified -modified time age date newest recent oldest path name len -len length path-len line-len linelen shortest longest line line-num linenum count -count
         for k in $keys
             string match -q "$val*" -- $k && printf "sort:%s\tSort by %s\n" "$k" "$k"
         end
         return 0
-    else if string match -rq '^sortr:(?<val>.*)' -- $token
-        set -l keys size bytes largest smallest modified time age date newest recent oldest path name len length path-len line-len linelen shortest longest line line-num linenum count
-        for k in $keys
-            string match -q "$val*" -- $k && printf "sortr:%s\tReverse sort by %s\n" "$k" "$k"
-        end
-        return 0
-    # 8. Type filters: t:, type:, nt:, no-type:
+    # 4. Type filters: t:, nt:
     else if string match -rq '^t:(?<val>.*)' -- $token
         for t in rs rust c cpp c++ py python go golang js javascript ts typescript toml json yaml yml md markdown sh shell bash fish zsh java kotlin kt zig lua sql html css web code data doc
             string match -q "$val*" -- $t && printf "t:%s\tFilter by type %s\n" "$t" "$t"
-        end
-        return 0
-    else if string match -rq '^type:(?<val>.*)' -- $token
-        for t in rs rust c cpp c++ py python go golang js javascript ts typescript toml json yaml yml md markdown sh shell bash fish zsh java kotlin kt zig lua sql html css web code data doc
-            string match -q "$val*" -- $t && printf "type:%s\tFilter by type %s\n" "$t" "$t"
         end
         return 0
     else if string match -rq '^nt:(?<val>.*)' -- $token
@@ -108,30 +44,24 @@ function __grx_complete_dsl
             string match -q "$val*" -- $t && printf "nt:%s\tExclude type %s\n" "$t" "$t"
         end
         return 0
-    else if string match -rq '^no-type:(?<val>.*)' -- $token
-        for t in rs rust c cpp c++ py python go golang js javascript ts typescript toml json yaml yml md markdown sh shell bash fish zsh java kotlin kt zig lua sql html css web code data doc
-            string match -q "$val*" -- $t && printf "no-type:%s\tExclude type %s\n" "$t" "$t"
-        end
-        return 0
-    # 9. Kind filter: kind:
+    # 5. Kind filter: kind:
     else if string match -rq '^kind:(?<val>.*)' -- $token
         for k in file dir link bin text
             string match -q "$val*" -- $k && printf "kind:%s\tSelect filesystem kind\n" "$k"
         end
         return 0
-    # 10. Type shortcuts: :ext
-    else if string match -rq '^:(?<val>.*)' -- $token
-        for t in rs rust c cpp c++ py python go golang js javascript ts typescript toml json yaml yml md markdown sh shell bash fish zsh java kotlin kt zig lua sql html css web code data doc
-            string match -q "$val*" -- $t && printf ":%s\tFilter filetype\n" "$t"
-        end
-        return 0
-    # 11. Booleans and yes/no options
+    # 6. Options and toggles: yes:, no:
     else if string match -rq '^yes:(?<val>.*)' -- $token
-        for y in dots bin case cache
+        for y in dots ignore bin case cache
             string match -q "$val*" -- $y && printf "yes:%s\tEnable option %s\n" "$y" "$y"
         end
         return 0
-    # 12. Actions: mv:, cp:
+    else if string match -rq '^no:(?<val>.*)' -- $token
+        for n in dots ignore bin case cache
+            string match -q "$val*" -- $n && printf "no:%s\tDisable option %s\n" "$n" "$n"
+        end
+        return 0
+    # 7. Actions: mv:, cp:
     else if string match -rq '^mv:(?<val>.*)' -- $token
         for d in $val*/
             test -d "$d" && printf "mv:%s\tMove matching items to directory\n" "$d"
@@ -159,22 +89,16 @@ complete -c grx -a "(__grx_complete_paths)" -d "Target path"
 complete -c grx -a "(__grx_complete_dsl)"
 
 # DSL static tokens & prefixes
-complete -c grx -a "link:" -d "DSL: select symbolic link by basename"
-complete -c grx -a "symlink:" -d "DSL: select symbolic link by basename"
-complete -c grx -a "dir:" -d "DSL: select directory by basename"
-complete -c grx -a "directory:" -d "DSL: select directory by basename"
-complete -c grx -a "file:" -d "DSL: select regular file by basename"
-complete -c grx -a "bin:" -d "DSL: select binary files (discovery or content)"
 complete -c grx -a "p:" -d "DSL: root starting path or directory (p:src/)"
-complete -c grx -a "path:" -d "DSL: root starting path or directory (path:src/)"
 complete -c grx -a "in:report" -d "DSL: match entry basename (contains pattern)"
 complete -c grx -a "in:=report.md" -d "DSL: match exact entry basename"
 complete -c grx -a "in:^report" -d "DSL: match entry basename starting with pattern"
 complete -c grx -a "in:report\\\$" -d "DSL: match entry basename ending with pattern"
-complete -c grx -a "ni:report" -d "DSL: exclude entry basename (not-in:)"
-complete -c grx -a "not-in:report" -d "DSL: exclude entry basename"
-complete -c grx -a "t:rs" -d "DSL: filter by file type or extension (type:)"
-complete -c grx -a "type:rs" -d "DSL: filter by file type or extension"
+complete -c grx -a "ni:report" -d "DSL: exclude entry basename"
+complete -c grx -a "t:rs" -d "DSL: filter by file type or extension"
+complete -c grx -a "nt:rs" -d "DSL: exclude file type or extension"
+complete -c grx -a "np:target/" -d "DSL: exclude directory path"
+complete -c grx -a "ns:foo" -d "DSL: exclude lines matching string"
 complete -c grx -a "kind:file" -d "DSL: select regular files (default)"
 complete -c grx -a "kind:dir" -d "DSL: select directories"
 complete -c grx -a "kind:link" -d "DSL: select symbolic links"
@@ -184,18 +108,16 @@ complete -c grx -a "larger:10MiB" -d "DSL: filter files larger than size thresho
 complete -c grx -a "smaller:1KiB" -d "DSL: filter files smaller than size threshold"
 complete -c grx -a "newer:7d" -d "DSL: filter entries modified within age"
 complete -c grx -a "older:30d" -d "DSL: filter entries modified before age"
-complete -c grx -a "np:target/" -d "DSL: exclude directory path (no-path:)"
-complete -c grx -a "no-path:target/" -d "DSL: exclude directory path"
-complete -c grx -a "nt:rs" -d "DSL: exclude file type (no-type:)"
-complete -c grx -a "no-type:rs" -d "DSL: exclude file type"
-complete -c grx -a "ns:foo" -d "DSL: exclude lines matching string (no-str:)"
-complete -c grx -a "no-str:foo" -d "DSL: exclude lines matching string"
+complete -c grx -a "max:10" -d "DSL: limit maximum matching lines per file"
+complete -c grx -a "head:10" -d "DSL: limit to first 10 global results"
+complete -c grx -a "tail:10" -d "DSL: limit to last 10 global results"
+complete -c grx -a "d:0" -d "DSL: current directory only (non-recursive)"
+complete -c grx -a "d:1" -d "DSL: descend at most 1 directory level"
+complete -c grx -a "ctx:3" -d "DSL: show 3 lines of context"
 complete -c grx -a "str:4" -d "DSL: extract printable strings (>= 4 chars) from binaries"
-complete -c grx -a "strings:8" -d "DSL: extract printable strings (>= 8 chars) from binaries"
 complete -c grx -a "near:3,pat" -d "DSL: proximity filter (pat must appear within N lines)"
 complete -c grx -a "no-near:3,pat" -d "DSL: inverted proximity (pat must NOT appear within N lines)"
 complete -c grx -a "fz:from,ptr,err" -d "DSL: fuzzy token permutation search"
-complete -c grx -a "%%from_ptr_err" -d "DSL: fuzzy token permutation shortcut"
 complete -c grx -a "re:regex" -d "DSL: explicit regular expression pattern"
 complete -c grx -a "hex:7f454c" -d "DSL: hex byte signature search"
 complete -c grx -a "sort:size" -d "DSL: sort by size ascending"
@@ -213,33 +135,21 @@ complete -c grx -a "sort:largest" -d "DSL: sort by largest size"
 complete -c grx -a "sort:smallest" -d "DSL: sort by smallest size"
 complete -c grx -a "sort:count" -d "DSL: sort by match count (highest first)"
 complete -c grx -a "sort:-count" -d "DSL: sort by match count (lowest first)"
-complete -c grx -a "sortr:size" -d "DSL: sort by size in reverse"
-complete -c grx -a "sortr:modified" -d "DSL: sort by modification time in reverse"
-complete -c grx -a "sortr:len" -d "DSL: sort by length in reverse"
-complete -c grx -a "sortr:count" -d "DSL: sort by match count in reverse"
-complete -c grx -a "head:10" -d "DSL: limit to first 10 results"
-complete -c grx -a "tail:10" -d "DSL: limit to last 10 results"
-complete -c grx -a "top:10" -d "DSL: limit maximum matching lines per file"
-complete -c grx -a "limit:10" -d "DSL: limit maximum matching lines per file"
-complete -c grx -a "d:0" -d "DSL: current directory only (non-recursive)"
-complete -c grx -a "d:1" -d "DSL: descend at most 1 directory level"
-complete -c grx -a "ctx:3" -d "DSL: show 3 lines of context"
 complete -c grx -a "AND" -d "Boolean: match both expressions"
 complete -c grx -a "OR" -d "Boolean: match either expression"
 complete -c grx -a "NOT" -d "Boolean: invert subsequent expression"
 complete -c grx -a "yes:dots" -d "Enable searching hidden files (.config, .bashrc)"
 complete -c grx -a "no:dots" -d "Disable searching hidden files"
+complete -c grx -a "yes:ignore" -d "Respect .gitignore and .ignore rules (default)"
+complete -c grx -a "no:ignore" -d "Disable .gitignore filtering"
 complete -c grx -a "yes:bin" -d "Enable searching binary files"
 complete -c grx -a "no:bin" -d "Disable searching binary files"
 complete -c grx -a "yes:case" -d "Force case-sensitive search"
 complete -c grx -a "no:case" -d "Force case-insensitive search"
 complete -c grx -a "yes:cache" -d "Include ephemeral cache directories (.cache/)"
-complete -c grx -a "only:rust" -d "Exclusively search Rust files"
-complete -c grx -a "only:bin" -d "Exclusively search binary files"
 complete -c grx -a "mv:dest/" -d "DSL: move matching items to destination directory"
 complete -c grx -a "cp:dest/" -d "DSL: copy matching items to destination directory"
-complete -c grx -a "rm:" -d "DSL: safely remove/trash matching items"
-complete -c grx -a "trash:" -d "DSL: safely remove/trash matching items"
+complete -c grx -a "trash:" -d "DSL: safely stage matching items into trash cache"
 complete -c grx -a "dry:" -d "DSL: simulate action without touching disk"
 complete -c grx -a "rename:pattern" -d "DSL: rename matching items via pattern"
 complete -c grx -a "chmod:755" -d "DSL: change permissions mode for matching items"
@@ -380,18 +290,16 @@ _grx_completions() {
     "
 
     local dsl_tokens="
-        link: symlink: dir: directory: file: bin:
-        p: path: np: no-path: nt: no-type: ns: no-str:
-        t: type: kind:file kind:dir kind:link kind:bin kind:text
-        sort: sortr:
-        head:10 tail:10 top:10 limit:10 ctx:3
+        p: in: ni: t: nt: np: ns:
+        kind:file kind:dir kind:link kind:bin kind:text
+        sort:
+        head:10 tail:10 max:10 ctx:3
         d:0 d:1 d:2
         larger:10MiB smaller:1KiB newer:7d older:30d
-        yes:dots no:dots yes:bin no:bin yes:case no:case yes:cache
-        only:rust only:bin
+        yes:dots no:dots yes:ignore no:ignore yes:bin no:bin yes:case no:case yes:cache
         AND OR NOT
-        str:4 strings:8 near:3, no-near:3, NEAR:3 fz: hex: re:
-        mv: cp: rm: trash: dry: rename: chmod: undo
+        str:4 near:3, no-near:3, NEAR:3 fz: hex: re:
+        mv: cp: trash: dry: rename: chmod: undo
     "
 
     case "$prev" in
@@ -427,61 +335,17 @@ _grx_completions() {
     if [[ "$cur" == -* ]]; then
         COMPREPLY=( $(compgen -W "$options" -- "$cur") )
         return 0
-    elif [[ "$cur" == :* ]]; then
-        local types=":rs :c :cpp :py :go :toml :json :yaml :md :web :code :data :doc"
-        COMPREPLY=( $(compgen -W "$types" -- "$cur") )
-        return 0
-    elif [[ "$cur" == no:* ]]; then
-        local prefix="${cur#no:}"
-        local matches=()
-        for d in "$prefix"*/; do
-            [[ -d "$d" ]] && matches+=("no:$d")
-        done
-        for ext in c cpp h hpp rs py go toml json yaml md js ts html css txt sh zig lua java; do
-            [[ "no:$ext" == "$cur"* ]] && matches+=("no:$ext")
-        done
-        COMPREPLY=( "${matches[@]}" )
-        return 0
-    elif [[ "$cur" == sort:* || "$cur" == sortr:* ]]; then
-        local prefix="${cur%%:*}"
+    elif [[ "$cur" == sort:* ]]; then
         local keys="size -size largest smallest modified -modified newest oldest path len -len shortest longest line-num count -count"
-        COMPREPLY=( $(compgen -W "$keys" -P "${prefix}:" -- "${cur#*:}") )
+        COMPREPLY=( $(compgen -W "$keys" -P "sort:" -- "${cur#sort:}") )
         return 0
-    elif [[ "$cur" == head:* || "$cur" == tail:* || "$cur" == top:* || "$cur" == limit:* ]]; then
+    elif [[ "$cur" == head:* || "$cur" == tail:* || "$cur" == max:* ]]; then
         return 0
-    elif [[ "$cur" == dir:* || "$cur" == directory:* ]]; then
-        local prefix="${cur%%:*}"
-        local val="${cur#*:}"
-        local matches=()
-        for d in "$val"*/; do
-            [[ -d "$d" ]] && matches+=("${prefix}:$d")
-        done
-        COMPREPLY=( "${matches[@]}" )
-        return 0
-    elif [[ "$cur" == file:* ]]; then
-        local prefix="${cur%%:*}"
-        local val="${cur#*:}"
-        local matches=()
-        for f in "$val"*; do
-            [[ -f "$f" ]] && matches+=("${prefix}:$f")
-        done
-        COMPREPLY=( "${matches[@]}" )
-        return 0
-    elif [[ "$cur" == link:* || "$cur" == symlink:* ]]; then
-        local prefix="${cur%%:*}"
-        local val="${cur#*:}"
-        local matches=()
-        for f in "$val"*; do
-            [[ -L "$f" || -e "$f" ]] && matches+=("${prefix}:$f")
-        done
-        COMPREPLY=( "${matches[@]}" )
-        return 0
-    elif [[ "$cur" == p:* || "$cur" == path:* ]]; then
-        local prefix="${cur%%:*}"
-        local val="${cur#*:}"
+    elif [[ "$cur" == p:* ]]; then
+        local val="${cur#p:}"
         local matches=()
         for p in "$val"*; do
-            [[ -e "$p" ]] && matches+=("${prefix}:$p")
+            [[ -e "$p" ]] && matches+=("p:$p")
         done
         COMPREPLY=( "${matches[@]}" )
         return 0
@@ -494,16 +358,15 @@ _grx_completions() {
         done
         COMPREPLY=( "${matches[@]}" )
         return 0
-    elif [[ "$cur" == np:* || "$cur" == no-path:* ]]; then
-        local prefix="${cur%%:*}"
-        local val="${cur#*:}"
+    elif [[ "$cur" == np:* ]]; then
+        local val="${cur#np:}"
         local matches=()
         for d in "$val"*/; do
-            [[ -d "$d" ]] && matches+=("${prefix}:$d")
+            [[ -d "$d" ]] && matches+=("np:$d")
         done
         COMPREPLY=( "${matches[@]}" )
         return 0
-    elif [[ "$cur" == t:* || "$cur" == type:* || "$cur" == nt:* || "$cur" == no-type:* ]]; then
+    elif [[ "$cur" == t:* || "$cur" == nt:* ]]; then
         local prefix="${cur#*:}"
         local types="rs rust c cpp c++ py python go golang js javascript ts typescript toml json yaml yml md markdown sh shell bash fish zsh java kotlin kt zig lua sql html css web code data doc"
         COMPREPLY=( $(compgen -W "$types" -P "${cur%%:*}:" -- "$prefix") )
@@ -511,8 +374,8 @@ _grx_completions() {
     elif [[ "$cur" == kind:* ]]; then
         COMPREPLY=( $(compgen -W "file dir link bin text" -P "kind:" -- "${cur#kind:}") )
         return 0
-    elif [[ "$cur" == yes:* ]]; then
-        COMPREPLY=( $(compgen -W "dots bin case cache" -P "yes:" -- "${cur#yes:}") )
+    elif [[ "$cur" == yes:* || "$cur" == no:* ]]; then
+        COMPREPLY=( $(compgen -W "dots ignore bin case cache" -P "${cur%%:*}:" -- "${cur#*:}") )
         return 0
     fi
 
@@ -635,53 +498,44 @@ _grx() {
         args)
             local -a dsl_tokens
             dsl_tokens=(
-                'link\:[select symbolic link by basename]'
-                'symlink\:[select symbolic link by basename]'
-                'dir\:[select directory by basename]'
-                'directory\:[select directory by basename]'
-                'file\:[select regular file by basename]'
-                'bin\:[select binary files (discovery or content)]'
                 'p\:[root starting path or directory]'
-                'path\:[root starting path or directory]'
                 'in\:[match entry basename containing pattern]'
                 'ni\:[exclude entry basename]'
                 't\:[filter by file type or extension]'
-                'type\:[filter by file type or extension]'
+                'nt\:[exclude file type]'
+                'np\:[exclude directory path]'
+                'ns\:[exclude matching lines]'
                 'kind\:file[select regular files]'
                 'kind\:dir[select directories]'
                 'kind\:link[select symbolic links]'
                 'kind\:bin[select binary files]'
                 'kind\:text[select plain text files]'
                 'sort\:size[sort by size ascending]'
-                'sort\:modified[sort by modification time]'
+                'sort\:-size[sort by size descending]'
+                'sort\:modified[sort by modification time newest first]'
+                'sort\:-modified[sort by modification time oldest first]'
                 'sort\:path[sort alphabetically by path]'
-                'sort\:len[sort by length]'
-                'sort\:count[sort by match count]'
-                'sortr\:size[sort by size descending]'
-                'sortr\:modified[sort by modification time oldest first]'
-                'sortr\:path[sort reverse alphabetically]'
-                'sortr\:len[sort by length longest first]'
-                'sortr\:count[sort by match count lowest first]'
-                'head\:10[limit to first 10 results]'
-                'tail\:10[limit to last 10 results]'
-                'top\:10[limit matches per file]'
-                'limit\:10[limit matches per file]'
+                'sort\:len[sort by length shortest first]'
+                'sort\:-len[sort by length longest first]'
+                'sort\:count[sort by match count highest first]'
+                'sort\:-count[sort by match count lowest first]'
+                'head\:10[limit to first 10 global results]'
+                'tail\:10[limit to last 10 global results]'
+                'max\:10[limit matches per file]'
                 'larger\:[filter files larger than threshold]'
                 'smaller\:[filter files smaller than threshold]'
                 'newer\:[filter entries modified within age]'
                 'older\:[filter entries modified before age]'
                 'str\:4[extract printable strings from binaries]'
-                'strings\:8[extract printable strings from binaries]'
                 'near\:3,[proximity filter pattern within N lines]'
                 'no-near\:3,[inverted proximity filter]'
                 'ctx\:3[show 3 lines of context]'
                 'd\:0[current directory only]'
                 'd\:1[descend at most 1 level]'
-                'np\:[exclude directory path]'
-                'nt\:[exclude file type]'
-                'ns\:[exclude matching lines]'
                 'yes\:dots[search hidden files]'
                 'no\:dots[ignore hidden files]'
+                'yes\:ignore[respect .gitignore rules]'
+                'no\:ignore[disable .gitignore filtering]'
                 'yes\:bin[search binary files]'
                 'no\:bin[ignore binary files]'
                 'yes\:case[force case-sensitive search]'
@@ -695,8 +549,7 @@ _grx() {
                 're\:[explicit regular expression pattern]'
                 'mv\:[move matching items to destination directory]'
                 'cp\:[copy matching items to destination directory]'
-                'rm\:[safely remove/trash matching items]'
-                'trash\:[safely remove/trash matching items]'
+                'trash\:[safely stage matching items into trash cache]'
                 'dry\:[simulate action without touching disk]'
                 'rename\:[rename matching items via destination pattern]'
                 'chmod\:[change permissions mode for matching items]'
@@ -886,15 +739,16 @@ mod tests {
         let script = generate_fish_completions();
         assert!(script.contains("complete -c grx -f"));
         assert!(script.contains("__grx_complete_dsl"));
-        assert!(script.contains("link:"));
-        assert!(script.contains("symlink:"));
-        assert!(script.contains("dir:"));
-        assert!(script.contains("directory:"));
-        assert!(script.contains("file:"));
-        assert!(script.contains("bin:"));
-        assert!(script.contains(":rs"));
+        assert!(script.contains("p:"));
         assert!(script.contains("in:report"));
+        assert!(script.contains("ni:report"));
+        assert!(script.contains("t:rs"));
+        assert!(script.contains("nt:rs"));
+        assert!(script.contains("np:target/"));
+        assert!(script.contains("ns:foo"));
         assert!(script.contains("kind:file"));
+        assert!(script.contains("kind:dir"));
+        assert!(script.contains("kind:link"));
         assert!(script.contains("kind:bin"));
         assert!(script.contains("kind:text"));
         assert!(!script.contains("+dot"));
@@ -903,7 +757,9 @@ mod tests {
         assert!(script.contains("__fish_complete_path"));
         assert!(script.contains("-l mode"));
         assert!(script.contains("sort:size"));
+        assert!(script.contains("sort:-size"));
         assert!(script.contains("sort:modified"));
+        assert!(script.contains("max:10"));
         assert!(script.contains("head:10"));
         assert!(script.contains("tail:10"));
         assert!(!script.contains("line:10"));
@@ -913,9 +769,10 @@ mod tests {
         assert!(script.contains("hex:7f454c"));
         assert!(script.contains("mv:dest/"));
         assert!(script.contains("cp:dest/"));
-        assert!(script.contains("rm:"));
         assert!(script.contains("trash:"));
         assert!(script.contains("dry:"));
+        assert!(script.contains("yes:ignore"));
+        assert!(script.contains("no:ignore"));
         assert!(script.contains("rename:pattern"));
         assert!(script.contains("chmod:755"));
         assert!(script.contains("NEAR:3"));
@@ -930,6 +787,26 @@ mod tests {
         assert!(script.contains("-l trash"));
         assert!(script.contains("-l clean-trash"));
         assert!(script.contains("-l list"));
+
+        // Strictly verify removal of deprecated tokens
+        assert!(!script.contains("link:"));
+        assert!(!script.contains("symlink:"));
+        assert!(!script.contains("dir:"));
+        assert!(!script.contains("directory:"));
+        assert!(!script.contains("file:"));
+        assert!(!script.contains("complete -c grx -a \":"));
+        assert!(!script.contains("string match -rq '^:'"));
+        assert!(!script.contains("type:rs"));
+        assert!(!script.contains("no-path:"));
+        assert!(!script.contains("no-type:"));
+        assert!(!script.contains("no-str:"));
+        assert!(!script.contains("sortr:"));
+        assert!(!script.contains("top:10"));
+        assert!(!script.contains("limit:10"));
+        assert!(!script.contains("strings:8"));
+        assert!(!script.contains("%%"));
+        assert!(!script.contains("only:rust"));
+        assert!(!script.contains("only:bin"));
     }
 
     #[test]
@@ -937,14 +814,13 @@ mod tests {
         let script = generate_bash_completions();
         assert!(script.contains("_grx_completions"));
         assert!(script.contains("complete -F _grx_completions grx"));
-        assert!(script.contains("link:*"));
-        assert!(script.contains("symlink:*"));
-        assert!(script.contains("dir:*"));
-        assert!(script.contains("file:*"));
         assert!(script.contains("p:*"));
+        assert!(script.contains("np:*"));
+        assert!(script.contains("t:*"));
+        assert!(script.contains("nt:*"));
         assert!(script.contains("kind:bin"));
         assert!(script.contains("kind:text"));
-        assert!(script.contains("bin:"));
+        assert!(script.contains("kind:file"));
         assert!(!script.contains("+dot"));
         assert!(!script.contains("+bin"));
         assert!(script.contains("--sort"));
@@ -952,13 +828,15 @@ mod tests {
         assert!(script.contains("--tail"));
         assert!(script.contains("sort:*"));
         assert!(script.contains("head:*"));
+        assert!(script.contains("max:*"));
         assert!(script.contains("hex:"));
         assert!(script.contains("re:"));
         assert!(script.contains("mv:"));
         assert!(script.contains("cp:"));
-        assert!(script.contains("rm:"));
         assert!(script.contains("trash:"));
         assert!(script.contains("dry:"));
+        assert!(script.contains("yes:ignore"));
+        assert!(script.contains("no:ignore"));
         assert!(script.contains("rename:"));
         assert!(script.contains("chmod:"));
         assert!(script.contains("NEAR:3"));
@@ -973,6 +851,21 @@ mod tests {
         assert!(script.contains("--rename"));
         assert!(script.contains("--chmod"));
         assert!(script.contains("--list"));
+
+        // Strictly verify removal of deprecated tokens
+        assert!(!script.contains("dir:*"));
+        assert!(!script.contains("file:*"));
+        assert!(!script.contains("link:*"));
+        assert!(!script.contains("symlink:*"));
+        assert!(!script.contains("bin:*"));
+        assert!(!script.contains("sortr:*"));
+        assert!(!script.contains("top:*"));
+        assert!(!script.contains("limit:*"));
+        assert!(!script.contains("no-path:"));
+        assert!(!script.contains("no-type:"));
+        assert!(!script.contains("no-str:"));
+        assert!(!script.contains("only:rust"));
+        assert!(!script.contains("only:bin"));
     }
 
     #[test]
@@ -980,29 +873,39 @@ mod tests {
         let script = generate_zsh_completions();
         assert!(script.contains("#compdef grx"));
         assert!(script.contains("_arguments"));
-        assert!(script.contains("link\\:"));
-        assert!(script.contains("symlink\\:"));
-        assert!(script.contains("dir\\:"));
-        assert!(script.contains("file\\:"));
-        assert!(script.contains("bin\\:"));
+        assert!(script.contains("p\\:"));
+        assert!(script.contains("in\\:"));
+        assert!(script.contains("ni\\:"));
+        assert!(script.contains("t\\:"));
+        assert!(script.contains("nt\\:"));
+        assert!(script.contains("np\\:"));
+        assert!(script.contains("ns\\:"));
         assert!(script.contains("kind\\:bin"));
         assert!(script.contains("kind\\:text"));
+        assert!(script.contains("kind\\:file"));
+        assert!(script.contains("kind\\:dir"));
+        assert!(script.contains("kind\\:link"));
         assert!(script.contains("--sort"));
         assert!(script.contains("--head"));
         assert!(script.contains("--tail"));
         assert!(script.contains("(-C --context)"));
         assert!(script.contains("(-B --before-context)"));
         assert!(script.contains("(-A --after-context)"));
-        assert!(script.contains("sortr\\:"));
+        assert!(script.contains("sort\\:size"));
+        assert!(script.contains("sort\\:-size"));
+        assert!(script.contains("max\\:10"));
+        assert!(script.contains("head\\:10"));
+        assert!(script.contains("tail\\:10"));
         assert!(script.contains("larger\\:"));
         assert!(script.contains("fz\\:"));
         assert!(script.contains("hex\\:"));
         assert!(script.contains("re\\:"));
         assert!(script.contains("mv\\:"));
         assert!(script.contains("cp\\:"));
-        assert!(script.contains("rm\\:"));
         assert!(script.contains("trash\\:"));
         assert!(script.contains("dry\\:"));
+        assert!(script.contains("yes\\:ignore"));
+        assert!(script.contains("no\\:ignore"));
         assert!(script.contains("rename\\:"));
         assert!(script.contains("chmod\\:"));
         assert!(script.contains("NEAR\\:3"));
@@ -1017,6 +920,17 @@ mod tests {
         assert!(script.contains("--rename"));
         assert!(script.contains("--chmod"));
         assert!(script.contains("--list"));
+
+        // Strictly verify removal of deprecated tokens
+        assert!(!script.contains("link\\:"));
+        assert!(!script.contains("symlink\\:"));
+        assert!(!script.contains("dir\\:"));
+        assert!(!script.contains("file\\:"));
+        assert!(!script.contains("bin\\:"));
+        assert!(!script.contains("sortr\\:"));
+        assert!(!script.contains("top\\:10"));
+        assert!(!script.contains("limit\\:10"));
+        assert!(!script.contains("strings\\:8"));
     }
 
     #[test]

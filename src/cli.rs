@@ -376,23 +376,24 @@ EXAMPLES:
     grx t:log larger:10MiB          # Discover log files larger than 10 MiB
     grx t:rs newer:7d               # Discover Rust files modified within 7 days
     grx auth d:0                    # Search current directory only (strictly non-recursive)
-    grx auth np:tests/ :rs          # Search 'auth' in Rust files, excluding tests/ (np: or no-path:)
-    grx auth ns:debug               # Search 'auth', rejecting lines containing 'debug' (ns: or no-str:)
-    grx get..id :rs                 # Shell-safe wildcard: 'get' followed by 'id'
+    grx auth np:tests/ t:rs         # Search 'auth' in Rust files, excluding tests/ (np: exclude path)
+    grx auth ns:debug               # Search 'auth', rejecting lines containing 'debug' (ns: exclude line)
+    grx get..id t:rs                # Shell-safe wildcard: 'get' followed by 'id'
     grx ^pub struct                 # Line anchor: lines starting with 'pub struct'
-    grx @token p:src/               # Whole-word '@token' inside src/ (or w:token)
+    grx @token p:src/               # Whole-word '@token' inside src/
     grx 'token' AND 'key'           # Both terms must appear on the same line
-    grx 'error' -debug              # Match 'error', reject lines containing 'debug'
-    grx top:10 ctx:2 pattern        # Limit to 10 matches with 2 context lines
+    grx 'error' NOT debug           # Match 'error', reject lines containing 'debug'
+    grx max:10 ctx:2 pattern        # Limit to 10 matches per file with 2 context lines
     grx auth near:5,safety          # Search 'auth' only if 'safety' appears within 5 lines
-    grx %%from_ptr_err              # Fuzzy token permutation (matches any order on line)
+    grx fz:from_ptr_err             # Fuzzy token permutation (matches any order on line)
     grx -Z 'string,from,""'         # CLI fuzzy search flag (or fz:'string,from,""')
-    grx ELF :bin                    # Mini-hexdump view of binary matches
-    grx str:4 :bin                  # Extract printable ASCII strings (>= 4 chars) from binaries
+    grx ELF kind:bin                # Mini-hexdump view of binary matches
+    grx str:4 kind:bin              # Extract printable ASCII strings (>= 4 chars) from binaries
     grx yes:dots 'secret'           # Search hidden dotfiles and directories
-    grx dir:cpp d:1 mv:cpp-proj/    # Move matching directories into cpp-proj/
+    grx no:ignore 'TODO'            # Search ignoring .gitignore rules
+    grx kind:dir in:cpp d:1 mv:dest # Move matching directories into dest/
     grx in:test t:py -X rm          # Batch remove matching files with system rm
-    grx in:temp --dry-run rm:       # Preview safe staging into trash
+    grx in:temp dry: trash:         # Preview safe staging into trash
     grx undo                        # Revert the latest filesystem mutation
     grx undo [TX_ID]                # Revert specific transaction by ID
     grx undo --list                 # List available undo transaction records
@@ -400,46 +401,41 @@ EXAMPLES:
     grx --mode grep -i "pattern"    # Standard POSIX grep mode
 
 SEARCH DSL CHEAT SHEET (Zero-Flag Filtering):
-    p:<path>, path:<path>           Target directory or file root (e.g. p:src/, path:crates/)
+    p:<path>                        Target directory or file path root (e.g. p:src/, p:crates/)
     in:<pat>, in:=<name>            Filter entry basename (contains, ^start, end$, ..seq, =exact)
-    dir:<pat>, file:<pat>, link:<pat> Select directory, file, or symlink by basename
-    bin:<pat>, bin:                 Select binary files by basename or enable binary search
-    ni:<pat>, not-in:<pat>          Exclude entry basename (e.g. ni:test, not-in:tmp)
-    t:<type>, type:<type>, :<type>  Filter filetype or extension (e.g. t:rs, :py, type:pdf)
+    ni:<pat>                        Exclude entry basename (e.g. ni:test, ni:*.bak)
+    t:<type>                        Filter filetype or extension (e.g. t:rs, t:py, t:pdf)
+    nt:<type>                       Exclude extension or filetype (e.g. nt:rs, nt:c,h)
     kind:file|dir|link|bin|text     Constrain entry kind in discovery/search (e.g. kind:bin)
-    sort:<key>, sortr:<key>         Sort results: size, modified, path, len, line, count
+    sort:<key>, sort:-<key>         Sort results: size, modified, path, len, line, count (- for desc)
     head:<N>, tail:<N>              Limit total results globally to first/last N
+    max:<N>                         Limit maximum matching lines per file (e.g. max:10)
     larger:<size>, smaller:<size>   Filter files by size (e.g. larger:10MiB, smaller:1KiB)
     newer:<age>, older:<age>        Filter entries by age (e.g. newer:7d, older:24h)
-    d:<N>, depth:<N>                Traversal recursion depth (d:0 = non-recursive)
-    top:<N>, limit:<N>              Limit maximum matching lines per file (e.g. top:10)
-    ctx:<N>, context:<N>            Unified before and after context lines (e.g. ctx:3)
-    np:<dir>, no-path:<dir>         Exclude directory or path (e.g. np:target/, np:steam*)
-    nt:<ext>, no-type:<ext>         Exclude extension or filetype (e.g. nt:rs, nt:c,h)
-    ns:<str>, no-str:<str>          Exclude content lines matching string (e.g. ns:debug)
-    no:<dir>/, !<dir>/              Exclude directory (shorthand for no-path)
-    no:<ext>, !*.<ext>              Exclude extension (shorthand for no-type)
+    d:<N>                           Traversal recursion depth (d:0 = non-recursive)
+    ctx:<N>                         Unified before and after context lines (e.g. ctx:3)
+    np:<dir>                        Exclude directory or path (e.g. np:target/, np:dist/)
+    ns:<str>                        Exclude content lines matching string (e.g. ns:debug)
     near:<N>,<pat>, near:<pat>      Proximity filter (pat must appear within N lines, default 3)
     no-near:<N>,<pat>               Inverted proximity (pat must NOT appear within N lines)
     <pat> NEAR:<N> <target>         Infix proximity operator (or NOT NEAR:<N>)
-    fz:<tokens>, %%<tokens>         Fuzzy token permutation match (any order on the same line)
+    fz:<tokens>                     Fuzzy token permutation match (any order on the same line)
     mv:<dest>, cp:<dest>            Move / copy matching items into destination directory
-    rm:, trash:                     Safely remove matching items (staged in trash WAL)
-    dry:, --dry-run                 Simulate action without touching disk
+    trash:                          Safely remove matching items (staged in trash WAL)
+    dry:                            Simulate action without touching disk
     yes:dots / no:dots              Include / exclude hidden dotfiles and directories
-    yes:bin / no:bin                Include / exclude searching binary files
+    yes:ignore / no:ignore          Respect / ignore .gitignore rules
+    yes:case / no:case              Force case-sensitive / case-insensitive search
+    yes:cache                       Include cache directories (.cache/)
     foo..bar                        Shell-safe unquoted wildcard (escapes shell expansion)
     'foo*bar', 'foo?bar'            Quoted glob wildcards converted to regex
     ^term, term$                    Indentation-aware line start (^) and line end ($) anchors
-    @term, w:term                   Whole-word match boundary (\bterm\b)
-    -@term, -w:term                 Forbidden whole-word term
-    +<term>                         Required term (must appear on matched line)
-    -<term>, not:<term>             Forbidden term (reject line if term appears)
+    @term                           Whole-word match boundary (\bterm\b)
     AND, OR, NOT                    Boolean pattern composition
     /regex/, re:<regex>             Explicit regular expression pattern
     "exact phrase"                  Literal phrase matching without regex escaping
     hex:48??e5                      Binary byte pattern with wildcards
-    str:<N>, strings:<N>            Extract printable strings (>= N chars) from binaries
+    str:<N>                         Extract printable strings (>= N chars) from binaries
 
 COMMON OPTIONS:
     -i, --ignore-case               Case-insensitive search (smart-case by default)

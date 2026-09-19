@@ -181,7 +181,7 @@ fn test_engine_dsl_max_count_limiting() {
     fs::write(&file_path, content.as_bytes()).unwrap();
 
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
-        .args(["match", "top:5", tmp.path().to_str().unwrap()])
+        .args(["match", "max:5", tmp.path().to_str().unwrap()])
         .output()
         .expect("Failed to execute grx binary");
 
@@ -190,7 +190,7 @@ fn test_engine_dsl_max_count_limiting() {
     let count = stdout.lines().filter(|l| l.contains("match line")).count();
     assert_eq!(
         count, 5,
-        "top:5 should strictly limit matching output lines to 5"
+        "max:5 should strictly limit matching output lines to 5"
     );
 }
 
@@ -386,7 +386,7 @@ fn test_cli_top_limit_exact_match_count() {
             "--color",
             "never",
             "repeatable",
-            "top:5",
+            "max:5",
             file_path.to_str().unwrap(),
         ])
         .output()
@@ -397,7 +397,7 @@ fn test_cli_top_limit_exact_match_count() {
     let matched_lines = stdout.lines().filter(|l| l.contains("repeatable")).count();
     assert_eq!(
         matched_lines, 5,
-        "top:5 DSL expression must limit output to exactly 5 matching lines, got {}",
+        "max:5 DSL expression must limit output to exactly 5 matching lines, got {}",
         matched_lines
     );
 }
@@ -433,7 +433,7 @@ fn test_cli_np_proj_excludes_projects_directory() {
             "--no-heading",
             "--color",
             "never",
-            ":rs",
+            "t:rs",
             "np:proj",
             "fn",
             root.to_str().unwrap(),
@@ -453,14 +453,14 @@ fn test_cli_np_proj_excludes_projects_directory() {
         "Should exclude cprojects via np:proj"
     );
 
-    // 2. Test unquoted `no:Projects/` without wildcards (component boundary directory exclusion)
+    // 2. Test unquoted `np:Projects/` without wildcards (component boundary directory exclusion)
     let output_no = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
         .args([
             "--no-heading",
             "--color",
             "never",
-            ":rs",
-            "no:Projects/",
+            "t:rs",
+            "np:Projects/",
             "fn",
             root.to_str().unwrap(),
         ])
@@ -472,21 +472,21 @@ fn test_cli_np_proj_excludes_projects_directory() {
     assert!(stdout_no.contains("quests.rs"), "Should match quests.rs");
     assert!(
         !stdout_no.contains("Projects"),
-        "Should exclude Data/Projects via no:Projects/"
+        "Should exclude Data/Projects via np:Projects/"
     );
     assert!(
         !stdout_no.contains("cprojects"),
-        "Should exclude cprojects via no:Projects/"
+        "Should exclude cprojects via np:Projects/"
     );
 
-    // 3. Test that `no:proj/` (with trailing slash) enforces component boundary and does NOT exclude Projects/
+    // 3. Test that `np:proj/` (with trailing slash) enforces component boundary and does NOT exclude Projects/
     let output_no_proj = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
         .args([
             "--no-heading",
             "--color",
             "never",
-            ":rs",
-            "no:proj/",
+            "t:rs",
+            "np:proj/",
             "fn",
             root.to_str().unwrap(),
         ])
@@ -497,7 +497,7 @@ fn test_cli_np_proj_excludes_projects_directory() {
     let stdout_no_proj = String::from_utf8_lossy(&output_no_proj.stdout);
     assert!(
         stdout_no_proj.contains("Projects"),
-        "no:proj/ should not exclude Projects directory without component match"
+        "np:proj/ should not exclude Projects directory without component match"
     );
 }
 
@@ -641,26 +641,37 @@ fn other_func(w: u32) -> Result<(), ()> {}
     assert!(stdout_fz.contains("err_ptr_from"));
     assert!(!stdout_fz.contains("other_func"));
 
-    // 2. DSL %% alias with snake_case auto-splitting: %%from_ptr_err
-    let output_percent = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
+    // 2. DSL fz: prefix with snake_case auto-splitting: fz:from_ptr_err
+    let output_fz2 = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
         .args([
             "--no-heading",
             "--color",
             "never",
-            "%%from_ptr_err",
+            "fz:from_ptr_err",
             file_path.to_str().unwrap(),
         ])
         .output()
         .expect("Failed to execute grx binary");
 
-    assert_eq!(output_percent.status.code(), Some(0));
-    let stdout_percent = String::from_utf8_lossy(&output_percent.stdout);
-    assert!(stdout_percent.contains("from_ptr_err"));
-    assert!(stdout_percent.contains("from_err_ptr"));
-    assert!(stdout_percent.contains("err_ptr_from"));
-    assert!(!stdout_percent.contains("other_func"));
+    assert_eq!(output_fz2.status.code(), Some(0));
+    let stdout_fz2 = String::from_utf8_lossy(&output_fz2.stdout);
+    assert!(stdout_fz2.contains("from_ptr_err"));
+    assert!(stdout_fz2.contains("from_err_ptr"));
+    assert!(stdout_fz2.contains("err_ptr_from"));
+    assert!(!stdout_fz2.contains("other_func"));
 
-    // 3. CLI flag -Z / --fuzzy
+    // 3. Deprecated %% prefix returns helpful error
+    let output_deprecated_pct = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
+        .args(["%%from_ptr_err", file_path.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute grx binary");
+    assert_eq!(output_deprecated_pct.status.code(), Some(2));
+    let err_pct = String::from_utf8_lossy(&output_deprecated_pct.stderr);
+    assert!(err_pct.contains(
+        "Fuzzy prefix in '%%from_ptr_err' is deprecated. Use canonical 'fz:from_ptr_err'"
+    ));
+
+    // 4. CLI flag -Z / --fuzzy
     let output_cli = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
         .args([
             "-Z",
@@ -683,27 +694,25 @@ fn other_func(w: u32) -> Result<(), ()> {}
 
 #[test]
 fn test_cli_fuzzy_empty_token_shell_quote_diagnostic() {
-    // When user types `grx %%` (which happens when shell strips `%%""`), grx outputs helpful diagnostic
+    // When user types `grx fz:` (which happens when shell strips quotes), grx outputs helpful diagnostic
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
-        .args(["%%"])
+        .args(["fz:"])
         .output()
         .expect("Failed to execute grx binary");
 
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("fuzzy search pattern received an empty argument"));
-    assert!(stderr.contains("shell stripped them"));
 
-    // When user types `%%,from,ptr` (which happens when shell strips `%%"",from,ptr`)
+    // When user types `fz:,from,ptr` (which happens when shell strips quotes)
     let output2 = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
-        .args(["%%,from,ptr"])
+        .args(["fz:,from,ptr"])
         .output()
         .expect("Failed to execute grx binary");
 
     assert_eq!(output2.status.code(), Some(2));
     let stderr2 = String::from_utf8_lossy(&output2.stderr);
     assert!(stderr2.contains("fuzzy search pattern received an empty token"));
-    assert!(stderr2.contains("shell stripped them"));
 }
 
 fn normalize_lines(stdout: &[u8]) -> Vec<String> {
@@ -1341,7 +1350,7 @@ fn test_acceptance_case_19_dir_and_file_exact_selectors() {
     let grx_bin = env!("CARGO_BIN_EXE_grx");
 
     let out_dir_src = std::process::Command::new(grx_bin)
-        .args(["dir:src", "np:data"])
+        .args(["kind:dir", "in:src", "np:data"])
         .current_dir(tmp_path)
         .output()
         .unwrap();
@@ -1349,7 +1358,7 @@ fn test_acceptance_case_19_dir_and_file_exact_selectors() {
     assert_eq!(normalize_lines(&out_dir_src.stdout), vec!["src/"]);
 
     let out_dir_exact_tail = std::process::Command::new(grx_bin)
-        .args(["--color=always", "dir:=src", "tail:5"])
+        .args(["--color=always", "kind:dir", "in:=src", "tail:5"])
         .current_dir(tmp_path)
         .output()
         .unwrap();
@@ -1358,7 +1367,7 @@ fn test_acceptance_case_19_dir_and_file_exact_selectors() {
     assert!(dir_tail_str.contains("\x1b[38;5;81msrc/\x1b[0m"));
 
     let out_file_main = std::process::Command::new(grx_bin)
-        .args(["file:=main.rs"])
+        .args(["kind:file", "in:=main.rs"])
         .current_dir(tmp_path)
         .output()
         .unwrap();
@@ -1551,7 +1560,7 @@ fn test_acceptance_case_23_name_collision_dir_vs_file() {
     std::fs::write(collision_dir.join("regular_file"), b"hello\n").unwrap();
 
     let out_collision_dir = std::process::Command::new(grx_bin)
-        .args(["p:collision/", "dir:=shared_name"])
+        .args(["p:collision/", "kind:dir", "in:=shared_name"])
         .current_dir(tmp_path)
         .output()
         .unwrap();
@@ -1562,7 +1571,7 @@ fn test_acceptance_case_23_name_collision_dir_vs_file() {
     );
 
     let out_collision_file = std::process::Command::new(grx_bin)
-        .args(["p:collision/", "file:=regular_file"])
+        .args(["p:collision/", "kind:file", "in:=regular_file"])
         .current_dir(tmp_path)
         .output()
         .unwrap();
@@ -1580,14 +1589,20 @@ fn test_acceptance_case_24_dir_trailing_slash_support() {
     let grx_bin = env!("CARGO_BIN_EXE_grx");
 
     let out_dir_slash = std::process::Command::new(grx_bin)
-        .args(["dir:src/"])
+        .args(["kind:dir", "in:src"])
         .current_dir(tmp_path)
         .output()
         .unwrap();
     assert_eq!(out_dir_slash.status.code(), Some(0));
-    let dir_slash_stderr = String::from_utf8_lossy(&out_dir_slash.stderr);
-    assert!(!dir_slash_stderr.contains("warning"));
     assert_eq!(normalize_lines(&out_dir_slash.stdout), vec!["src/"]);
+
+    // Deprecated dir:src/ returns error
+    let out_deprecated = std::process::Command::new(grx_bin)
+        .args(["dir:src/"])
+        .current_dir(tmp_path)
+        .output()
+        .unwrap();
+    assert_eq!(out_deprecated.status.code(), Some(2));
 }
 
 #[test]
@@ -1606,7 +1621,7 @@ fn test_acceptance_case_25_trailing_flag_rejection_and_sort_syntax() {
     assert!(trailing_err.contains("CLI flag '-i' was placed after positional search arguments"));
 
     let out_trailing_sort = std::process::Command::new(grx_bin)
-        .args(["file:=main.rs", "--sort=size"])
+        .args(["kind:file", "in:=main.rs", "--sort=size"])
         .current_dir(tmp_path)
         .output()
         .unwrap();
@@ -2170,7 +2185,7 @@ fn test_engine_corner_cases_and_limits() {
             .unwrap();
         assert_eq!(out_eq_flag.status.code(), Some(2));
 
-        // Explicit negative namespace ns:m1 or -@m1 is allowed and matches
+        // Explicit negative namespace ns:m1 or ns:@m1 is allowed and matches
         let out_neg_namespace = std::process::Command::new(grx_bin)
             .args(["alpha", "ns:m1", "p:search_flags.txt"])
             .current_dir(tmp_path)
@@ -2178,12 +2193,20 @@ fn test_engine_corner_cases_and_limits() {
             .unwrap();
         assert_eq!(out_neg_namespace.status.code(), Some(0));
 
+        let out_neg_at = std::process::Command::new(grx_bin)
+            .args(["alpha", "ns:@m1", "p:search_flags.txt"])
+            .current_dir(tmp_path)
+            .output()
+            .unwrap();
+        assert_eq!(out_neg_at.status.code(), Some(0));
+
+        // Leading -@m1 is deprecated to avoid CLI flag confusion
         let out_neg_literal = std::process::Command::new(grx_bin)
             .args(["alpha", "-@m1", "p:search_flags.txt"])
             .current_dir(tmp_path)
             .output()
             .unwrap();
-        assert_eq!(out_neg_literal.status.code(), Some(0));
+        assert_eq!(out_neg_literal.status.code(), Some(2));
     }
 
     // Case 5: Symlink depth regression (d:0 drops root-level file symlinks)
@@ -2661,12 +2684,19 @@ fn test_dsl_double_colon_prefix_and_exclamation_dir_exclusion() {
     fs::create_dir(&sub).unwrap();
     fs::write(sub.join("other.txt"), b"kept content\n").unwrap();
 
-    // Exclamation directory exclusion !sub/
+    // Canonical directory exclusion np:sub/
     let out_excl = std::process::Command::new(grx_bin)
-        .args(["content", "!sub/", git_dir.to_str().unwrap()])
+        .args(["content", "np:sub/", git_dir.to_str().unwrap()])
         .output()
         .unwrap();
     assert_eq!(out_excl.status.code(), Some(1));
+
+    // Deprecated exclamation directory exclusion !sub/ returns error
+    let out_deprecated_excl = std::process::Command::new(grx_bin)
+        .args(["content", "!sub/", git_dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(out_deprecated_excl.status.code(), Some(2));
 }
 
 #[test]
@@ -2867,11 +2897,11 @@ fn test_inline_actions_mv_and_undo() {
     fs::create_dir(&dest).unwrap();
     fs::write(d1.join("hello.cpp"), b"// hello").unwrap();
 
-    // grx dir:cpp d:1 mv:cpp-projects/
+    // grx kind:dir in:cpp d:1 mv:cpp-projects/
     let status = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
         .current_dir(root)
         .env("XDG_DATA_HOME", &data_home)
-        .args(["dir:cpp", "d:1", "mv:cpp-projects/"])
+        .args(["kind:dir", "in:cpp", "d:1", "mv:cpp-projects/"])
         .status()
         .unwrap();
     assert_eq!(status.code(), Some(0));
@@ -2967,7 +2997,7 @@ fn test_inline_actions_rm_and_undo() {
     let rm_status = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
         .current_dir(root)
         .env("XDG_DATA_HOME", &data_home)
-        .args(["in:trashme", "rm:"])
+        .args(["in:trashme", "trash:"])
         .status()
         .unwrap();
     assert_eq!(rm_status.code(), Some(0));
@@ -2983,6 +3013,14 @@ fn test_inline_actions_rm_and_undo() {
     assert_eq!(undo_status.code(), Some(0));
     assert!(f.exists());
     assert_eq!(fs::read(&f).unwrap(), b"secret data to recover");
+
+    // Deprecated rm: returns error
+    let deprecated_rm_status = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
+        .current_dir(root)
+        .args(["in:trashme", "rm:"])
+        .status()
+        .unwrap();
+    assert_eq!(deprecated_rm_status.code(), Some(2));
 }
 
 #[test]
@@ -3029,7 +3067,7 @@ fn test_content_action_safety_requires_files_with_matches() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
         .current_dir(root)
         .env("XDG_DATA_HOME", &data_home)
-        .args(["TODO", "rm:", "."])
+        .args(["TODO", "trash:", "."])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
@@ -3041,7 +3079,7 @@ fn test_content_action_safety_requires_files_with_matches() {
     let output_l = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
         .current_dir(root)
         .env("XDG_DATA_HOME", &data_home)
-        .args(["-l", "TODO", "rm:", "."])
+        .args(["-l", "TODO", "trash:", "."])
         .output()
         .unwrap();
     assert_eq!(output_l.status.code(), Some(0));
@@ -3318,16 +3356,17 @@ fn test_kind_bin_and_bin_mode_discovery_and_content() {
     assert!(stdout_bin.contains("binary.dat"));
     assert!(!stdout_bin.contains("hello.txt"));
 
-    // 2. Discovery for binary files via bin: shorthand
+    // 2. Deprecated bin: shorthand returns clear consolidation guidance
     let out_bin_shorthand = std::process::Command::new(grx_bin)
         .current_dir(root)
         .args(["bin:", "."])
         .output()
         .unwrap();
-    assert_eq!(out_bin_shorthand.status.code(), Some(0));
-    let stdout_shorthand = String::from_utf8_lossy(&out_bin_shorthand.stdout);
-    assert!(stdout_shorthand.contains("binary.dat"));
-    assert!(!stdout_shorthand.contains("hello.txt"));
+    assert_eq!(out_bin_shorthand.status.code(), Some(2));
+    let err_shorthand = String::from_utf8_lossy(&out_bin_shorthand.stderr);
+    assert!(
+        err_shorthand.contains("Prefix 'bin:' has been consolidated. Use canonical 'kind:bin'")
+    );
 
     // 3. Discovery for text files: kind:text
     let out_kind_text = std::process::Command::new(grx_bin)
@@ -3351,16 +3390,15 @@ fn test_kind_bin_and_bin_mode_discovery_and_content() {
     assert!(search_bin_str.contains("binary.dat"));
     assert!(!search_bin_str.contains("hello.txt"));
 
-    // 5. Content search in binary files via bin: shorthand
+    // 5. Content search with deprecated bin: shorthand returns consolidation guidance
     let out_search_bin_shorthand = std::process::Command::new(grx_bin)
         .current_dir(root)
         .args(["--no-heading", "-l", "needle", "bin:", "."])
         .output()
         .unwrap();
-    assert_eq!(out_search_bin_shorthand.status.code(), Some(0));
-    let search_bin_sh_str = String::from_utf8_lossy(&out_search_bin_shorthand.stdout);
-    assert!(search_bin_sh_str.contains("binary.dat"));
-    assert!(!search_bin_sh_str.contains("hello.txt"));
+    assert_eq!(out_search_bin_shorthand.status.code(), Some(2));
+    let search_err = String::from_utf8_lossy(&out_search_bin_shorthand.stderr);
+    assert!(search_err.contains("Prefix 'bin:' has been consolidated. Use canonical 'kind:bin'"));
 
     // 6. Content search in text files: grx "needle" kind:text
     let out_search_text = std::process::Command::new(grx_bin)
@@ -3373,17 +3411,25 @@ fn test_kind_bin_and_bin_mode_discovery_and_content() {
     assert!(search_text_str.contains("hello.txt"));
     assert!(!search_text_str.contains("binary.dat"));
 
-    // 7. Positive search term +bin: requires string "bin" on line
+    // 7. Search term "bin" matches string "bin" on line
     let code_file = root.join("code.rs");
     fs::write(&code_file, b"let bin = 42;\nlet val = 99;\n").unwrap();
 
+    let out_bin = std::process::Command::new(grx_bin)
+        .current_dir(root)
+        .args(["--no-heading", "bin", "."])
+        .output()
+        .unwrap();
+    assert_eq!(out_bin.status.code(), Some(0));
+    let bin_str = String::from_utf8_lossy(&out_bin.stdout);
+    assert!(bin_str.contains("let bin = 42;"));
+    assert!(!bin_str.contains("let val = 99;"));
+
+    // Deprecated +bin returns error
     let out_plus_bin = std::process::Command::new(grx_bin)
         .current_dir(root)
         .args(["--no-heading", "+bin", "."])
         .output()
         .unwrap();
-    assert_eq!(out_plus_bin.status.code(), Some(0));
-    let plus_bin_str = String::from_utf8_lossy(&out_plus_bin.stdout);
-    assert!(plus_bin_str.contains("let bin = 42;"));
-    assert!(!plus_bin_str.contains("let val = 99;"));
+    assert_eq!(out_plus_bin.status.code(), Some(2));
 }

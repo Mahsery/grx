@@ -26,18 +26,16 @@ _grx_completions() {
     "
 
     local dsl_tokens="
-        link: symlink: dir: directory: file: bin:
-        p: path: np: no-path: nt: no-type: ns: no-str:
-        t: type: kind:file kind:dir kind:link kind:bin kind:text
-        sort: sortr:
-        head:10 tail:10 top:10 limit:10 ctx:3
+        p: in: ni: t: nt: np: ns:
+        kind:file kind:dir kind:link kind:bin kind:text
+        sort:
+        head:10 tail:10 max:10 ctx:3
         d:0 d:1 d:2
         larger:10MiB smaller:1KiB newer:7d older:30d
-        yes:dots no:dots yes:bin no:bin yes:case no:case yes:cache
-        only:rust only:bin
+        yes:dots no:dots yes:ignore no:ignore yes:bin no:bin yes:case no:case yes:cache
         AND OR NOT
-        str:4 strings:8 near:3, no-near:3, NEAR:3 fz: hex: re:
-        mv: cp: rm: trash: dry: rename: chmod: undo
+        str:4 near:3, no-near:3, NEAR:3 fz: hex: re:
+        mv: cp: trash: dry: rename: chmod: undo
     "
 
     case "$prev" in
@@ -73,61 +71,17 @@ _grx_completions() {
     if [[ "$cur" == -* ]]; then
         COMPREPLY=( $(compgen -W "$options" -- "$cur") )
         return 0
-    elif [[ "$cur" == :* ]]; then
-        local types=":rs :c :cpp :py :go :toml :json :yaml :md :web :code :data :doc"
-        COMPREPLY=( $(compgen -W "$types" -- "$cur") )
-        return 0
-    elif [[ "$cur" == no:* ]]; then
-        local prefix="${cur#no:}"
-        local matches=()
-        for d in "$prefix"*/; do
-            [[ -d "$d" ]] && matches+=("no:$d")
-        done
-        for ext in c cpp h hpp rs py go toml json yaml md js ts html css txt sh zig lua java; do
-            [[ "no:$ext" == "$cur"* ]] && matches+=("no:$ext")
-        done
-        COMPREPLY=( "${matches[@]}" )
-        return 0
-    elif [[ "$cur" == sort:* || "$cur" == sortr:* ]]; then
-        local prefix="${cur%%:*}"
+    elif [[ "$cur" == sort:* ]]; then
         local keys="size -size largest smallest modified -modified newest oldest path len -len shortest longest line-num count -count"
-        COMPREPLY=( $(compgen -W "$keys" -P "${prefix}:" -- "${cur#*:}") )
+        COMPREPLY=( $(compgen -W "$keys" -P "sort:" -- "${cur#sort:}") )
         return 0
-    elif [[ "$cur" == head:* || "$cur" == tail:* || "$cur" == top:* || "$cur" == limit:* ]]; then
+    elif [[ "$cur" == head:* || "$cur" == tail:* || "$cur" == max:* ]]; then
         return 0
-    elif [[ "$cur" == dir:* || "$cur" == directory:* ]]; then
-        local prefix="${cur%%:*}"
-        local val="${cur#*:}"
-        local matches=()
-        for d in "$val"*/; do
-            [[ -d "$d" ]] && matches+=("${prefix}:$d")
-        done
-        COMPREPLY=( "${matches[@]}" )
-        return 0
-    elif [[ "$cur" == file:* ]]; then
-        local prefix="${cur%%:*}"
-        local val="${cur#*:}"
-        local matches=()
-        for f in "$val"*; do
-            [[ -f "$f" ]] && matches+=("${prefix}:$f")
-        done
-        COMPREPLY=( "${matches[@]}" )
-        return 0
-    elif [[ "$cur" == link:* || "$cur" == symlink:* ]]; then
-        local prefix="${cur%%:*}"
-        local val="${cur#*:}"
-        local matches=()
-        for f in "$val"*; do
-            [[ -L "$f" || -e "$f" ]] && matches+=("${prefix}:$f")
-        done
-        COMPREPLY=( "${matches[@]}" )
-        return 0
-    elif [[ "$cur" == p:* || "$cur" == path:* ]]; then
-        local prefix="${cur%%:*}"
-        local val="${cur#*:}"
+    elif [[ "$cur" == p:* ]]; then
+        local val="${cur#p:}"
         local matches=()
         for p in "$val"*; do
-            [[ -e "$p" ]] && matches+=("${prefix}:$p")
+            [[ -e "$p" ]] && matches+=("p:$p")
         done
         COMPREPLY=( "${matches[@]}" )
         return 0
@@ -140,16 +94,15 @@ _grx_completions() {
         done
         COMPREPLY=( "${matches[@]}" )
         return 0
-    elif [[ "$cur" == np:* || "$cur" == no-path:* ]]; then
-        local prefix="${cur%%:*}"
-        local val="${cur#*:}"
+    elif [[ "$cur" == np:* ]]; then
+        local val="${cur#np:}"
         local matches=()
         for d in "$val"*/; do
-            [[ -d "$d" ]] && matches+=("${prefix}:$d")
+            [[ -d "$d" ]] && matches+=("np:$d")
         done
         COMPREPLY=( "${matches[@]}" )
         return 0
-    elif [[ "$cur" == t:* || "$cur" == type:* || "$cur" == nt:* || "$cur" == no-type:* ]]; then
+    elif [[ "$cur" == t:* || "$cur" == nt:* ]]; then
         local prefix="${cur#*:}"
         local types="rs rust c cpp c++ py python go golang js javascript ts typescript toml json yaml yml md markdown sh shell bash fish zsh java kotlin kt zig lua sql html css web code data doc"
         COMPREPLY=( $(compgen -W "$types" -P "${cur%%:*}:" -- "$prefix") )
@@ -157,8 +110,8 @@ _grx_completions() {
     elif [[ "$cur" == kind:* ]]; then
         COMPREPLY=( $(compgen -W "file dir link bin text" -P "kind:" -- "${cur#kind:}") )
         return 0
-    elif [[ "$cur" == yes:* ]]; then
-        COMPREPLY=( $(compgen -W "dots bin case cache" -P "yes:" -- "${cur#yes:}") )
+    elif [[ "$cur" == yes:* || "$cur" == no:* ]]; then
+        COMPREPLY=( $(compgen -W "dots ignore bin case cache" -P "${cur%%:*}:" -- "${cur#*:}") )
         return 0
     fi
 

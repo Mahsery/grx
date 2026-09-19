@@ -1779,8 +1779,9 @@ impl Engine {
             }
         }
 
-        let respect_ignore =
-            !self.cli.no_ignore && !self.config.search.no_ignore && self.cli.unrestricted < 1;
+        let respect_ignore = query.respect_ignore.unwrap_or(
+            !self.cli.no_ignore && !self.config.search.no_ignore && self.cli.unrestricted < 1,
+        );
         let search_hidden = query
             .search_hidden
             .unwrap_or(self.cli.hidden || self.config.search.hidden || self.cli.unrestricted >= 2);
@@ -2272,7 +2273,7 @@ mod tests {
     #[test]
     fn test_dsl_max_depth_and_limits() {
         let config = Config::default();
-        let cli = Cli::parse_from(["grx", "pattern", "d:0", "top:10", "ctx:2", "p:src/"]);
+        let cli = Cli::parse_from(["grx", "pattern", "d:0", "max:10", "ctx:2", "p:src/"]);
         let engine = Engine::new(config, cli);
         let query = engine.build_dsl_query().unwrap();
 
