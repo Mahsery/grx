@@ -999,7 +999,7 @@ impl DslParser {
                 {
                     pattern_tokens.push(Token::Pattern(compile(s, false)));
                 }
-                Token::Target(p) => query.targets.push(p.clone()),
+                Token::Target(p) => query.targets.push(crate::config::Config::expand_tilde(p)),
                 Token::SearchHidden(h) => query.search_hidden = Some(*h),
                 Token::RespectIgnore(r) => query.respect_ignore = Some(*r),
                 Token::FollowSymlinks(f) => query.follow_symlinks = Some(*f),
@@ -1023,12 +1023,16 @@ impl DslParser {
                 Token::Pattern(SearchPattern::Literal { text, .. })
                     if has_external || query.fuzzy.is_some() =>
                 {
-                    query.targets.push(PathBuf::from(text));
+                    query
+                        .targets
+                        .push(crate::config::Config::expand_tilde(PathBuf::from(text)));
                 }
                 Token::Pattern(SearchPattern::ExactLiteral(text))
                     if has_external || query.fuzzy.is_some() =>
                 {
-                    query.targets.push(PathBuf::from(text));
+                    query
+                        .targets
+                        .push(crate::config::Config::expand_tilde(PathBuf::from(text)));
                 }
                 Token::Pattern(SearchPattern::Literal { text, .. })
                     if !matches!(
@@ -1036,7 +1040,9 @@ impl DslParser {
                         Some(Token::And | Token::Or | Token::Not)
                     ) && !pattern_tokens.is_empty() =>
                 {
-                    query.targets.push(PathBuf::from(text));
+                    query
+                        .targets
+                        .push(crate::config::Config::expand_tilde(PathBuf::from(text)));
                 }
                 Token::Pattern(SearchPattern::ExactLiteral(text))
                     if !matches!(
@@ -1044,7 +1050,9 @@ impl DslParser {
                         Some(Token::And | Token::Or | Token::Not)
                     ) && !pattern_tokens.is_empty() =>
                 {
-                    query.targets.push(PathBuf::from(text));
+                    query
+                        .targets
+                        .push(crate::config::Config::expand_tilde(PathBuf::from(text)));
                 }
                 Token::Pattern(SearchPattern::Regex(_))
                     if !matches!(
@@ -1058,7 +1066,9 @@ impl DslParser {
                         && !s.starts_with('@')
                         && !(s.starts_with('/') && s.ends_with('/')) =>
                 {
-                    query.targets.push(PathBuf::from(s));
+                    query
+                        .targets
+                        .push(crate::config::Config::expand_tilde(PathBuf::from(s)));
                 }
                 tok => pattern_tokens.push(tok.clone()),
             }
@@ -1597,17 +1607,17 @@ impl DslParser {
             if dest.is_empty() {
                 return Err(format!("Expected destination directory after '{s}'"));
             }
-            return Ok(Token::Action(crate::ops::ActionKind::Move(PathBuf::from(
-                dest,
-            ))));
+            return Ok(Token::Action(crate::ops::ActionKind::Move(
+                crate::config::Config::expand_tilde(PathBuf::from(dest)),
+            )));
         }
         if let Some(dest) = s.strip_prefix("cp:") {
             if dest.is_empty() {
                 return Err(format!("Expected destination directory after '{s}'"));
             }
-            return Ok(Token::Action(crate::ops::ActionKind::Copy(PathBuf::from(
-                dest,
-            ))));
+            return Ok(Token::Action(crate::ops::ActionKind::Copy(
+                crate::config::Config::expand_tilde(PathBuf::from(dest)),
+            )));
         }
         if let Some(rest) = s.strip_prefix("trash:") {
             if rest.is_empty() {
@@ -1657,7 +1667,7 @@ impl DslParser {
             }
             let paths: Vec<String> = rest
                 .split(',')
-                .map(|p| p.trim().to_string())
+                .map(|p| crate::config::Config::expand_tilde_str(p.trim()))
                 .filter(|p| !p.is_empty())
                 .collect();
             if paths.is_empty() {
@@ -1678,7 +1688,7 @@ impl DslParser {
             }
             let paths: Vec<String> = rest
                 .split(',')
-                .map(|p| p.trim().to_string())
+                .map(|p| crate::config::Config::expand_tilde_str(p.trim()))
                 .filter(|p| !p.is_empty())
                 .collect();
             if paths.is_empty() {
@@ -3983,5 +3993,57 @@ mod tests {
             err_bytes
                 .contains("Did you mean 'larger:500' or 'smaller:500' for file size filtering?")
         );
+    }
+
+    #[test]
+    fn test_dsl_tilde_path_resolution_and_safety() {
+        if let Some(home) = crate::config::Config::user_home_dir() {
+            let home_str = home.to_string_lossy().to_string();
+
+            // 1. Path inclusion: p:~/Data
+            let q_inc = DslParser::parse(vec!["query", "p:~/Data"]).unwrap();
+            assert_eq!(q_inc.path_includes, vec![format!("{home_str}/Data")]);
+
+            // 2. Comma-separated path inclusion: p:~/Data,~/Projects
+            let q_multi = DslParser::parse(vec!["query", "p:~/Data,~/Projects"]).unwrap();
+            assert_eq!(
+                q_multi.path_includes,
+                vec![format!("{home_str}/Data"), format!("{home_str}/Projects")]
+            );
+
+            // 3. Path exclusion: np:~/cache/
+            let q_exc = DslParser::parse(vec!["query", "np:~/cache/"]).unwrap();
+            assert_eq!(q_exc.path_excludes, vec![format!("{home_str}/cache/")]);
+
+            // 4. Action move and copy: mv:~/backup/
+            let q_mv = DslParser::parse(vec!["in:test", "mv:~/backup"]).unwrap();
+            assert_eq!(
+                q_mv.action,
+                Some(crate::ops::ActionKind::Move(home.join("backup")))
+            );
+
+            let q_cp = DslParser::parse(vec!["in:test", "cp:~/dest/"]).unwrap();
+            assert_eq!(
+                q_cp.action,
+                Some(crate::ops::ActionKind::Copy(home.join("dest/")))
+            );
+
+            // 5. Positional target path: grx pattern ~/Data
+            let q_pos = DslParser::parse(vec!["pattern", "~/Data"]).unwrap();
+            assert_eq!(q_pos.targets, vec![home.join("Data")]);
+        }
+
+        // 6. Critical safety invariant: Search patterns containing '~' MUST NEVER be expanded
+        let q_pat = DslParser::parse(vec!["~"]).unwrap();
+        assert!(
+            matches!(q_pat.expr, Some(QueryExpr::Pattern(SearchPattern::Literal { ref text, .. })) if text == "~")
+        );
+        assert!(q_pat.targets.is_empty());
+
+        let q_pat_infix = DslParser::parse(vec!["foo~bar", "p:src/"]).unwrap();
+        assert!(
+            matches!(q_pat_infix.expr, Some(QueryExpr::Pattern(SearchPattern::Literal { ref text, .. })) if text == "foo~bar")
+        );
+        assert_eq!(q_pat_infix.path_includes, vec!["src/"]);
     }
 }

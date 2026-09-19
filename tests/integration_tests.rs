@@ -3433,3 +3433,33 @@ fn test_kind_bin_and_bin_mode_discovery_and_content() {
         .unwrap();
     assert_eq!(out_plus_bin.status.code(), Some(2));
 }
+
+#[test]
+fn test_tilde_path_resolution_cli() {
+    let grx_bin = env!("CARGO_BIN_EXE_grx");
+    let mock_home = tempfile::tempdir().unwrap();
+    let projects_dir = mock_home.path().join("Data").join("Projects");
+    fs::create_dir_all(&projects_dir).unwrap();
+    let target_file = projects_dir.join("sample.rs");
+    fs::write(&target_file, b"pub fn main_fn() -> i32 { 42 }\n").unwrap();
+
+    // 1. Test p:~/Data/Projects
+    let out = std::process::Command::new(grx_bin)
+        .env("HOME", mock_home.path())
+        .args(["main..fn", "p:~/Data/Projects"])
+        .output()
+        .unwrap();
+
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("main_fn"));
+
+    // 2. Test literal ~ search pattern does NOT get expanded to HOME path
+    let out_pat = std::process::Command::new(grx_bin)
+        .env("HOME", mock_home.path())
+        .current_dir(mock_home.path())
+        .args(["~"])
+        .output()
+        .unwrap();
+    assert_eq!(out_pat.status.code(), Some(1));
+}

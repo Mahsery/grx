@@ -1508,7 +1508,8 @@ impl Engine {
     fn collect_patterns(&self) -> Result<Vec<String>, String> {
         let mut patterns = self.cli.regexp.clone();
         for file_path in &self.cli.file {
-            let content = std::fs::read_to_string(file_path).map_err(|e| {
+            let expanded = crate::config::Config::expand_tilde(file_path);
+            let content = std::fs::read_to_string(&expanded).map_err(|e| {
                 format!("Failed to read pattern file '{}': {e}", file_path.display())
             })?;
             for line in content.lines() {
@@ -1644,7 +1645,12 @@ impl Engine {
         }
 
         for inc in &query.path_includes {
-            query.targets.push(PathBuf::from(inc));
+            query
+                .targets
+                .push(crate::config::Config::expand_tilde(PathBuf::from(inc)));
+        }
+        for target in &mut query.targets {
+            *target = crate::config::Config::expand_tilde(&*target);
         }
 
         if let Some(ref mut expr) = query.expr {
@@ -1680,11 +1686,15 @@ impl Engine {
 
         if let Some(ref dst) = self.cli.r#move {
             action_count += 1;
-            cli_action = Some(crate::ops::ActionKind::Move(dst.clone()));
+            cli_action = Some(crate::ops::ActionKind::Move(
+                crate::config::Config::expand_tilde(dst),
+            ));
         }
         if let Some(ref dst) = self.cli.copy {
             action_count += 1;
-            cli_action = Some(crate::ops::ActionKind::Copy(dst.clone()));
+            cli_action = Some(crate::ops::ActionKind::Copy(
+                crate::config::Config::expand_tilde(dst),
+            ));
         }
         if self.cli.trash {
             action_count += 1;

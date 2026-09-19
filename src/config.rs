@@ -454,16 +454,17 @@ impl Config {
     /// 4. `$XDG_CONFIG_HOME/grx/config.toml` (or `~/.config/grx/config.toml`).
     /// 5. `~/.grx.toml` (classic dotfile fallback).
     pub fn locate_config_path(custom_path: Option<&Path>) -> Option<PathBuf> {
-        if let Some(path) = custom_path
-            && path.is_file()
-        {
-            return Some(path.to_path_buf());
+        if let Some(path) = custom_path {
+            let expanded = Self::expand_tilde(path);
+            if expanded.is_file() {
+                return Some(expanded);
+            }
         }
 
         if let Ok(env_path) = std::env::var("GRX_CONFIG")
             && !env_path.trim().is_empty()
         {
-            let p = PathBuf::from(env_path.trim());
+            let p = Self::expand_tilde(Path::new(env_path.trim()));
             if p.is_file() {
                 return Some(p);
             }
@@ -511,10 +512,11 @@ impl Config {
         }
 
         // Also check if custom_path was provided directly even if not yet checked by is_file
-        if let Some(path) = custom_path
-            && let Ok(cfg) = Self::load_file(path)
-        {
-            return cfg;
+        if let Some(path) = custom_path {
+            let expanded = Self::expand_tilde(path);
+            if let Ok(cfg) = Self::load_file(&expanded) {
+                return cfg;
+            }
         }
 
         Self::new_with_defaults()
@@ -523,7 +525,90 @@ impl Config {
     /// Load an explicitly requested configuration path without silently
     /// substituting defaults for path, permission, or TOML errors.
     pub fn load_explicit(path: &Path) -> Result<Self, String> {
-        Self::load_file(path)
+        let expanded = Self::expand_tilde(path);
+        Self::load_file(&expanded)
+    }
+
+    /// Resolve the user's home directory across Linux, macOS, and Windows.
+    pub fn user_home_dir() -> Option<PathBuf> {
+        if let Ok(home) = std::env::var("HOME")
+            && !home.trim().is_empty()
+        {
+            return Some(PathBuf::from(home.trim()));
+        }
+        #[cfg(windows)]
+        {
+            if let Ok(userprofile) = std::env::var("USERPROFILE")
+                && !userprofile.trim().is_empty()
+            {
+                return Some(PathBuf::from(userprofile.trim()));
+            }
+        }
+        None
+    }
+
+    /// Expand leading `~` or `~/` in a path to the user's home directory.
+    ///
+    /// Leaves other paths (e.g. `./~`, `foo~bar`, `~user/`) untouched to avoid false positives.
+    pub fn expand_tilde<P: AsRef<Path>>(path: P) -> PathBuf {
+        let p = path.as_ref();
+        let s = p.to_string_lossy();
+        if s == "~" {
+            if let Some(home) = Self::user_home_dir() {
+                return home;
+            }
+        } else if let Some(rest) = s.strip_prefix("~/")
+            && let Some(home) = Self::user_home_dir()
+        {
+            return home.join(rest);
+        }
+        #[cfg(windows)]
+        {
+            if let Some(rest) = s.strip_prefix("~\\")
+                && let Some(home) = Self::user_home_dir()
+            {
+                return home.join(rest);
+            }
+        }
+        p.to_path_buf()
+    }
+
+    /// Expand leading `~` or `~/` in a path string (preserving trailing slashes).
+    ///
+    /// Leaves non-home paths untouched to avoid collisions.
+    pub fn expand_tilde_str(path_str: &str) -> String {
+        if path_str == "~" {
+            if let Some(home) = Self::user_home_dir() {
+                return home.to_string_lossy().into_owned();
+            }
+        } else if let Some(rest) = path_str.strip_prefix("~/")
+            && let Some(home) = Self::user_home_dir()
+        {
+            let mut s = home.join(rest).to_string_lossy().into_owned();
+            if (rest.ends_with('/') || rest.ends_with('\\'))
+                && !s.ends_with('/')
+                && !s.ends_with('\\')
+            {
+                s.push('/');
+            }
+            return s;
+        }
+        #[cfg(windows)]
+        {
+            if let Some(rest) = path_str.strip_prefix("~\\")
+                && let Some(home) = Self::user_home_dir()
+            {
+                let mut s = home.join(rest).to_string_lossy().into_owned();
+                if (rest.ends_with('/') || rest.ends_with('\\'))
+                    && !s.ends_with('/')
+                    && !s.ends_with('\\')
+                {
+                    s.push('\\');
+                }
+                return s;
+            }
+        }
+        path_str.to_string()
     }
 
     /// Distro-appropriate configuration directory ($XDG_CONFIG_HOME/grx or ~/.config/grx).
@@ -726,7 +811,7 @@ impl Config {
     /// If the file does not exist, it is automatically initialized with the default template first.
     pub fn open_in_editor(custom_path: Option<&Path>) -> std::io::Result<i32> {
         let path = if let Some(p) = custom_path {
-            p.to_path_buf()
+            Self::expand_tilde(p)
         } else {
             let p = Self::config_file_path();
             if !p.is_file() {
@@ -1148,5 +1233,41 @@ mod tests {
         let invalid_error = Config::load_explicit(&invalid).unwrap_err();
         assert!(invalid_error.contains("failed to parse config"));
         assert!(invalid_error.contains("invalid.toml"));
+    }
+
+    #[test]
+    fn test_tilde_expansion_behavior() {
+        if let Some(home) = Config::user_home_dir() {
+            // 1. Bare tilde
+            assert_eq!(Config::expand_tilde("~"), home);
+            assert_eq!(Config::expand_tilde_str("~"), home.to_string_lossy());
+
+            // 2. Subdirectory under home
+            assert_eq!(Config::expand_tilde("~/Projects"), home.join("Projects"));
+            assert_eq!(
+                Config::expand_tilde_str("~/Projects"),
+                home.join("Projects").to_string_lossy()
+            );
+
+            // 3. Trailing slash preservation
+            let trailing = Config::expand_tilde_str("~/Projects/");
+            assert!(trailing.ends_with('/'));
+            assert_eq!(
+                trailing.trim_end_matches('/'),
+                home.join("Projects")
+                    .to_string_lossy()
+                    .trim_end_matches('/')
+            );
+        }
+
+        // 4. Infix/suffix tildes must NEVER expand (avoid collisions with backup files or filenames)
+        assert_eq!(
+            Config::expand_tilde("file.txt~"),
+            PathBuf::from("file.txt~")
+        );
+        assert_eq!(Config::expand_tilde_str("foo~bar"), "foo~bar");
+        assert_eq!(Config::expand_tilde("./~"), PathBuf::from("./~"));
+        assert_eq!(Config::expand_tilde_str("*~"), "*~");
+        assert_eq!(Config::expand_tilde_str("~other/dir"), "~other/dir");
     }
 }
