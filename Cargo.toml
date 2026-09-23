@@ -1,6 +1,6 @@
 [package]
 name = "grx"
-version = "0.1.0+459b54f"
+version = "0.2.0+018ef10"
 edition = "2024"
 authors = ["Mehmet Koseoglu <mehmet.mkoseoglu@gmail.com>"]
 description = "Fast, ergonomic grep/ripgrep CLI with a human-friendly search DSL"

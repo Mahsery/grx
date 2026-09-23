@@ -302,7 +302,7 @@ dependencies = [
 
 [[package]]
 name = "grx"
-version = "0.1.0+459b54f"
+version = "0.2.0+018ef10"
 dependencies = [
  "clap",
  "criterion",

@@ -11,7 +11,7 @@ A file search and discovery CLI built around a compact inline query syntax.
 ### Search File Contents
 ```bash
 # Search for 'auth' in Rust files under src/
-grx auth p:src/ :rs
+grx auth p:src/ t:rs
 
 # Case-insensitive search, excluding test files
 grx token -i ni:test
@@ -20,7 +20,7 @@ grx token -i ni:test
 grx unsafe near:5,pointer
 ```
 
-### Find Files / Directories (omit the search pattern)
+### Find Files / Directories by Name
 ```bash
 # Find all PDF reports modified in the last 7 days
 grx in:report t:pdf newer:7d
@@ -73,9 +73,10 @@ Standard flags (`-i`, `-w`, `-F`, `-C <N>`, `-l`, `-c`, `-j <threads>`, etc.) wo
 ## How It Works
 
 - **Parsing**: `grx report` searches file contents. `grx kind:file report` finds file names containing `report`; `grx report kind:file` searches contents only in regular files. This order also distinguishes name discovery from content search for `kind:bin` and `kind:text`. `kind:dir` and `kind:link` support name discovery; placing them after a content pattern is an error. Use `-e` before `kind:` to request content search explicitly, and `in:` to filter basenames in either mode.
+- **Match Display**: Colored discovery results highlight the matching part of each filename with a contrasting background. Content matches keep their own highlight color. Configure them separately with `output.colors.name-match-highlight` and `output.colors.match-highlight`.
 - **Directory Traversal**: Uses a work-stealing thread pool (`crossbeam-deque`) respecting `.gitignore` rules. On Linux, it queries directory entries directly using the `SYS_getdents64` syscall to reduce libc overhead.
 - **Search Core**: Files under 64 KB are read via buffered streaming; larger files use memory mapping (`memmap2`). Fast byte scanning (`memchr`) rejects non-matching lines before invoking regular expressions.
-- **Undo Log**: Mutating operations (`mv:`, `cp:`, `rm:`) write an action record to `~/.local/share/grx/` before touching files, allowing `grx undo` to restore or move items back.
+- **Undo Log**: Mutating operations (`mv:`, `cp:`, `trash:`) write an action record to `~/.local/share/grx/` before touching files, allowing `grx undo` to restore or move items back.
 
 ---
 
@@ -85,11 +86,11 @@ Tested against `ripgrep` on a warm repository tree (Linux x86_64, `python3 scrip
 
 | Scenario | `grx` | `ripgrep` | Notes |
 | :--- | :--- | :--- | :--- |
-| **Repository Search** (`auth :rs`) | **2.9 ms** | 4.7 ms | Competitive on smaller, warm codebases |
+| **Repository Search** (`auth t:rs`) | **2.9 ms** | 4.7 ms | Competitive on smaller, warm codebases |
 | **Exclusion Query** (`auth np:target/`) | 6.0 ms | **4.5 ms** | Similar performance |
 | **50 MB Corpus (1,000 files)** | 14.5 ms | **7.1 ms** | `ripgrep` is faster on large bulk scans |
 
-*`grx` is fast enough for interactive terminal use, but `ripgrep` remains significantly faster on raw bulk throughput.*
+*These are historical local measurements, not a benchmark of version 0.2.0. `ripgrep` was faster on the bulk scan in that run.*
 
 ---
 
