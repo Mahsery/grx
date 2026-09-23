@@ -234,7 +234,7 @@ impl OutputFormatter {
                 styled.push_str(&name[offset..start]);
                 styled.push_str(suffix);
             }
-            styled.push_str(&self.colors.match_highlight);
+            styled.push_str(&self.colors.name_match_highlight);
             styled.push_str(&name[start..end]);
             styled.push_str("\x1b[0m");
             offset = end;
@@ -2779,6 +2779,7 @@ mod tests {
             line_number: "\x1b[36m".to_string(), // cyan
             column: "\x1b[33m".to_string(),
             match_highlight: "\x1b[1;32m".to_string(), // bold green
+            name_match_highlight: "\x1b[30;48;5;220m".to_string(),
             context: "\x1b[37m".to_string(),
         };
 

@@ -1293,7 +1293,7 @@ fn test_acceptance_case_17_discovery_colors_and_hyperlinks() {
     let color_stdout = String::from_utf8_lossy(&out_color.stdout);
     let sep = std::path::MAIN_SEPARATOR;
     assert!(color_stdout.contains(&format!(
-        "\x1b[38;5;81mDocuments{sep}\x1b[0m\x1b[1;31mreport.md\x1b[0m"
+        "\x1b[38;5;81mDocuments{sep}\x1b[0m\x1b[30;48;5;220mreport.md\x1b[0m"
     )));
 
     let out_dir_color = std::process::Command::new(grx_bin)
@@ -1303,7 +1303,7 @@ fn test_acceptance_case_17_discovery_colors_and_hyperlinks() {
         .unwrap();
     assert_eq!(out_dir_color.status.code(), Some(0));
     let dir_color_stdout = String::from_utf8_lossy(&out_dir_color.stdout);
-    assert!(dir_color_stdout.contains("\x1b[1;31mcache\x1b[0m\x1b[38;5;81m/\x1b[0m"));
+    assert!(dir_color_stdout.contains("\x1b[30;48;5;220mcache\x1b[0m\x1b[38;5;81m/\x1b[0m"));
 
     let out_links = std::process::Command::new(grx_bin)
         .args(["--hyperlinks=always", "in:report", "p:Documents/"])
@@ -1364,7 +1364,7 @@ fn test_acceptance_case_19_dir_and_file_exact_selectors() {
         .unwrap();
     assert_eq!(out_dir_exact_tail.status.code(), Some(0));
     let dir_tail_str = String::from_utf8_lossy(&out_dir_exact_tail.stdout);
-    assert!(dir_tail_str.contains("\x1b[1;31msrc\x1b[0m\x1b[38;5;81m/\x1b[0m"));
+    assert!(dir_tail_str.contains("\x1b[30;48;5;220msrc\x1b[0m\x1b[38;5;81m/\x1b[0m"));
 
     let out_file_main = std::process::Command::new(grx_bin)
         .args(["kind:file", "in:=main.rs"])
@@ -1483,7 +1483,7 @@ fn test_discovery_highlights_matched_basename_without_changing_machine_output() 
     let tmp = tempdir().unwrap();
     let root = tmp.path();
     fs::create_dir(root.join("scripts")).unwrap();
-    fs::write(root.join("scripts/bump_version.py"), b"nothing here\n").unwrap();
+    fs::write(root.join("scripts/bump_version.py"), b"rs\n").unwrap();
     fs::write(root.join("scripts/rsrs.rs"), b"nothing here\n").unwrap();
 
     let run = |args: &[&str]| {
@@ -1498,36 +1498,40 @@ fn test_discovery_highlights_matched_basename_without_changing_machine_output() 
     assert_eq!(colored.status.code(), Some(0));
     let displayed = String::from_utf8(colored.stdout).unwrap();
     assert!(displayed.contains("\x1b[38;5;81mscripts/\x1b[0m"));
-    assert!(displayed.contains("bump_ve\x1b[0m\x1b[1;31mrs\x1b[0m"));
-    assert!(displayed.contains("\x1b[1;31mrsrs\x1b[0m"));
-    assert!(!displayed.contains("\x1b[1;31mscripts"));
+    assert!(displayed.contains("bump_ve\x1b[0m\x1b[30;48;5;220mrs\x1b[0m"));
+    assert!(displayed.contains("\x1b[30;48;5;220mrsrs\x1b[0m"));
+    assert!(!displayed.contains("\x1b[30;48;5;220mscripts"));
 
     let sorted = run(&["--color=always", "kind:file", "rs", "sort:path"]);
     assert_eq!(sorted.status.code(), Some(0));
-    assert!(String::from_utf8_lossy(&sorted.stdout).contains("\x1b[1;31mrs\x1b[0m"));
+    assert!(String::from_utf8_lossy(&sorted.stdout).contains("\x1b[30;48;5;220mrs\x1b[0m"));
 
     let case = run(&["--color=always", "-i", "kind:file", "RS"]);
     assert_eq!(case.status.code(), Some(0));
-    assert!(String::from_utf8_lossy(&case.stdout).contains("\x1b[1;31mrs\x1b[0m"));
+    assert!(String::from_utf8_lossy(&case.stdout).contains("\x1b[30;48;5;220mrs\x1b[0m"));
 
     let wildcard = run(&["--color=always", "kind:file", "bump..ion"]);
     assert_eq!(wildcard.status.code(), Some(0));
     let wildcard_text = String::from_utf8_lossy(&wildcard.stdout);
-    assert!(wildcard_text.contains("\x1b[1;31mbump\x1b[0m"));
-    assert!(wildcard_text.contains("\x1b[1;31mion\x1b[0m"));
-    assert!(!wildcard_text.contains("\x1b[1;31m_version"));
+    assert!(wildcard_text.contains("\x1b[30;48;5;220mbump\x1b[0m"));
+    assert!(wildcard_text.contains("\x1b[30;48;5;220mion\x1b[0m"));
+    assert!(!wildcard_text.contains("\x1b[30;48;5;220m_version"));
 
     let selectors = run(&["--color=always", "in:bump", "in:ion", "kind:file"]);
     assert_eq!(selectors.status.code(), Some(0));
     let selectors_text = String::from_utf8_lossy(&selectors.stdout);
-    assert!(selectors_text.contains("\x1b[1;31mbump\x1b[0m"));
-    assert!(selectors_text.contains("\x1b[1;31mion\x1b[0m"));
+    assert!(selectors_text.contains("\x1b[30;48;5;220mbump\x1b[0m"));
+    assert!(selectors_text.contains("\x1b[30;48;5;220mion\x1b[0m"));
 
     let linked = run(&["--color=always", "--hyperlinks=always", "kind:file", "rs"]);
     assert_eq!(linked.status.code(), Some(0));
     let linked_text = String::from_utf8_lossy(&linked.stdout);
     assert!(linked_text.contains("\x1b]8;;file://"));
-    assert!(linked_text.contains("\x1b[1;31mrs\x1b[0m"));
+    assert!(linked_text.contains("\x1b[30;48;5;220mrs\x1b[0m"));
+
+    let content = run(&["--color=always", "rs", "kind:file"]);
+    assert_eq!(content.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&content.stdout).contains("\x1b[1;31mrs\x1b[0m"));
 
     let plain = run(&["kind:file", "rs"]);
     assert_eq!(plain.status.code(), Some(0));

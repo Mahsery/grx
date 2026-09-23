@@ -143,6 +143,8 @@ pub struct ColorTheme {
     pub column: String,
     /// ANSI escape sequence or style spec for matched text highlights (default: "\x1b[1;31m").
     pub match_highlight: String,
+    /// ANSI style for matched filename text in discovery output (default: black on amber).
+    pub name_match_highlight: String,
     /// ANSI escape sequence or style spec for context lines (default: "\x1b[38;5;250m").
     pub context: String,
 }
@@ -154,6 +156,7 @@ impl Default for ColorTheme {
             line_number: "\x1b[32m".to_string(),
             column: "\x1b[38;5;108m".to_string(),
             match_highlight: "\x1b[1;31m".to_string(),
+            name_match_highlight: "\x1b[30;48;5;220m".to_string(),
             context: "\x1b[38;5;250m".to_string(),
         }
     }
@@ -992,6 +995,9 @@ impl Config {
 # ANSI escape code for matching text.
 # match-highlight = "\u001b[1;31m"
 
+# ANSI escape code for matching filename text in discovery output.
+# name-match-highlight = "\u001b[30;48;5;220m"
+
 # ANSI escape code for context lines.
 # context = "\u001b[38;5;250m"
 
@@ -1129,6 +1135,7 @@ mod tests {
         assert_eq!(cfg.output.colors.line_number, "\x1b[32m");
         assert_eq!(cfg.output.colors.column, "\x1b[38;5;108m");
         assert_eq!(cfg.output.colors.match_highlight, "\x1b[1;31m");
+        assert_eq!(cfg.output.colors.name_match_highlight, "\x1b[30;48;5;220m");
         assert_eq!(cfg.output.colors.context, "\x1b[38;5;250m");
         assert!(cfg.default_excludes.contains(&"target/".to_string()));
     }
@@ -1141,6 +1148,7 @@ mod tests {
             line-number = "\u001b[33m"
             column = "\u001b[36m"
             match-highlight = "\u001b[1;32m"
+            name-match-highlight = "\u001b[30;48;5;214m"
             context = "\u001b[37m"
         "#;
         let cfg: Config = toml::from_str(toml_str).expect("failed to parse TOML");
@@ -1148,7 +1156,16 @@ mod tests {
         assert_eq!(cfg.output.colors.line_number, "\x1b[33m");
         assert_eq!(cfg.output.colors.column, "\x1b[36m");
         assert_eq!(cfg.output.colors.match_highlight, "\x1b[1;32m");
+        assert_eq!(cfg.output.colors.name_match_highlight, "\x1b[30;48;5;214m");
         assert_eq!(cfg.output.colors.context, "\x1b[37m");
+
+        let old_theme: Config =
+            toml::from_str("[output.colors]\nmatch-highlight = \"\\u001b[1;32m\"\n")
+                .expect("existing color configuration should remain valid");
+        assert_eq!(
+            old_theme.output.colors.name_match_highlight,
+            "\x1b[30;48;5;220m"
+        );
     }
 
     #[test]
