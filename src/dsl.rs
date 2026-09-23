@@ -1085,7 +1085,6 @@ impl DslParser {
                         && (s.starts_with("re:")
                             || s.starts_with("hex:")
                             || s.starts_with('@')
-                            || s.starts_with('=')
                             || (s.starts_with('/') && s.ends_with('/') && s.len() >= 2))
                     {
                         explicit_content_pattern = true;
@@ -1113,7 +1112,11 @@ impl DslParser {
                 }
                 for (tok, raw) in pattern_tokens.iter().zip(&pattern_sources) {
                     let name = match tok {
-                        Token::Pattern(SearchPattern::ExactLiteral(text)) => text.as_str(),
+                        Token::Pattern(SearchPattern::ExactLiteral(text))
+                            if !raw.starts_with('=') =>
+                        {
+                            text.as_str()
+                        }
                         _ => raw.as_str(),
                     };
                     query.basename_includes.push(name.to_string());
@@ -3922,6 +3925,11 @@ mod tests {
         assert!(q.is_discovery());
         assert_eq!(q.basename_includes, vec!["needle"]);
         assert_eq!(q.targets, vec![PathBuf::from("src")]);
+
+        let q = DslParser::parse(["kind:file", "=needle.txt"]).unwrap();
+        assert!(q.is_discovery());
+        assert_eq!(q.basename_includes, vec!["=needle.txt"]);
+        assert!(q.basename_filters[0].is_exact);
     }
 
     #[test]

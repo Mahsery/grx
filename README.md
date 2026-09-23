@@ -28,7 +28,7 @@ grx in:report t:pdf newer:7d
 # Find all directories named 'cache'
 grx kind:dir cache
 
-# Find regular files named like 'report'
+# Find regular files named like 'report' (use =report.md for an exact name)
 grx kind:file report
 ```
 

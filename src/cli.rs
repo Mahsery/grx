@@ -366,6 +366,7 @@ EXAMPLES:
     grx auth p:src/                 # Search 'auth' under src/ (p:root)
     grx "Steam/"                    # Bare path-like text searches contents without kind:
     grx kind:file report            # Find regular files with 'report' in the name
+    grx kind:file =report.md        # Find a regular file with this exact name
     grx report kind:file            # Search file contents for 'report' (regular files only)
     grx in:report                   # Discover files/entries whose basename contains 'report'
     grx in:report t:pdf             # Discover PDF files containing 'report'
@@ -607,6 +608,12 @@ pub fn render_tutorial(color: bool) -> String {
         color,
         "grx kind:file report",
         "Find regular files with 'report' in the name",
+    );
+    push_cmd(
+        &mut out,
+        color,
+        "grx kind:file =report.md",
+        "Find a regular file with this exact name",
     );
     push_cmd(
         &mut out,
@@ -1432,6 +1439,7 @@ mod tests {
         assert!(plain.contains("in:report"));
         assert!(plain.contains("kind:dir"));
         assert!(plain.contains("grx kind:file report"));
+        assert!(plain.contains("grx kind:file =report.md"));
         assert!(plain.contains("grx report kind:file"));
         assert!(!plain.contains("first bare argument is ALWAYS"));
         assert!(plain.contains("near:5,safety"));

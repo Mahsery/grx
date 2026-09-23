@@ -1400,6 +1400,13 @@ fn test_kind_position_distinguishes_names_from_content() {
         vec!["needle_bin.dat", "needle_name.txt"]
     );
 
+    let exact_file_name = run(&["kind:file", "=needle_name.txt"]);
+    assert_eq!(exact_file_name.status.code(), Some(0));
+    assert_eq!(
+        normalize_lines(&exact_file_name.stdout),
+        vec!["needle_name.txt"]
+    );
+
     let files_by_content = run(&["-l", "needle", "kind:file"]);
     assert_eq!(files_by_content.status.code(), Some(0));
     assert_eq!(
