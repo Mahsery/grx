@@ -364,7 +364,9 @@ USAGE:
 
 EXAMPLES:
     grx auth p:src/                 # Search 'auth' under src/ (p:root)
-    grx "Steam/"                    # First bare arg is always pattern (even with slashes)
+    grx "Steam/"                    # Bare path-like text searches contents without kind:
+    grx kind:file report            # Find regular files with 'report' in the name
+    grx report kind:file            # Search file contents for 'report' (regular files only)
     grx in:report                   # Discover files/entries whose basename contains 'report'
     grx in:report t:pdf             # Discover PDF files containing 'report'
     grx in:=report.md p:Documents/  # Discover exact 'report.md' under Documents/
@@ -406,7 +408,7 @@ SEARCH DSL CHEAT SHEET (Zero-Flag Filtering):
     ni:<pat>                        Exclude entry basename (e.g. ni:test, ni:*.bak)
     t:<type>                        Filter filetype or extension (e.g. t:rs, t:py, t:pdf)
     nt:<type>                       Exclude extension or filetype (e.g. nt:rs, nt:c,h)
-    kind:file|dir|link|bin|text     Constrain entry kind in discovery/search (e.g. kind:bin)
+    kind:file|dir|link|bin|text     Before bare term: find names; after term: filter content search
     sort:<key>, sort:-<key>         Sort results: size, modified, path, len, line, count (- for desc)
     head:<N>, tail:<N>              Limit total results globally to first/last N
     max:<N>                         Limit maximum matching lines per file (e.g. max:10)
@@ -438,6 +440,7 @@ SEARCH DSL CHEAT SHEET (Zero-Flag Filtering):
     str:<N>                         Extract printable strings (>= N chars) from binaries
 
 COMMON OPTIONS:
+    -e, --regexp <PATTERN>           Explicit content pattern (even before kind:)
     -i, --ignore-case               Case-insensitive search (smart-case by default)
     -s, --case-sensitive            Force case-sensitive search
     -S, --smart-case                Smart-case: case-sensitive only if uppercase present
@@ -597,7 +600,19 @@ pub fn render_tutorial(color: bool) -> String {
         "POSITIONAL DSL & ZERO-FLAG PATH FILTERING",
     );
     out.push_str(
-        "  The first bare argument is ALWAYS the search pattern; filter paths directly:\n",
+        "  A bare term searches contents, unless kind: appears first; then it finds entry names:\n",
+    );
+    push_cmd(
+        &mut out,
+        color,
+        "grx kind:file report",
+        "Find regular files with 'report' in the name",
+    );
+    push_cmd(
+        &mut out,
+        color,
+        "grx report kind:file",
+        "Search 'report' inside regular files",
     );
     push_cmd(
         &mut out,
@@ -796,7 +811,7 @@ pub fn render_tutorial(color: bool) -> String {
         &mut out,
         color,
         "grx str:4 kind:bin",
-        "Extract printable ASCII strings >= 4 chars with byte offsets",
+        "Extract printable ASCII strings >= 4 chars",
     );
     push_cmd(
         &mut out,
@@ -1099,6 +1114,12 @@ pub fn render_tutorial(color: bool) -> String {
         color,
         "grx kind:dir in:cache",
         "Discover directories matching 'cache' (kind:dir)",
+    );
+    push_cmd(
+        &mut out,
+        color,
+        "grx kind:bin ELF",
+        "Find binary files with 'ELF' in the name",
     );
     push_cmd(
         &mut out,
@@ -1410,6 +1431,9 @@ mod tests {
         assert!(plain.contains("UNIFIED FILE DISCOVERY & ENTRY SELECTION"));
         assert!(plain.contains("in:report"));
         assert!(plain.contains("kind:dir"));
+        assert!(plain.contains("grx kind:file report"));
+        assert!(plain.contains("grx report kind:file"));
+        assert!(!plain.contains("first bare argument is ALWAYS"));
         assert!(plain.contains("near:5,safety"));
         assert!(plain.contains("fz:from_ptr_err"));
 

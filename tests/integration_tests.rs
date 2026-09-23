@@ -1376,6 +1376,102 @@ fn test_acceptance_case_19_dir_and_file_exact_selectors() {
 }
 
 #[test]
+fn test_kind_position_distinguishes_names_from_content() {
+    let tmp = tempdir().unwrap();
+    let root = tmp.path();
+    fs::write(root.join("needle_name.txt"), b"unrelated\n").unwrap();
+    fs::write(root.join("body_only.txt"), b"needle\n").unwrap();
+    fs::write(root.join("needle_bin.dat"), b"\0unrelated\0").unwrap();
+    fs::write(root.join("body_bin.dat"), b"\0needle\0").unwrap();
+    fs::create_dir(root.join("needle_dir")).unwrap();
+
+    let run = |args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
+            .current_dir(root)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+
+    let files_by_name = run(&["kind:file", "needle"]);
+    assert_eq!(files_by_name.status.code(), Some(0));
+    assert_eq!(
+        normalize_lines(&files_by_name.stdout),
+        vec!["needle_bin.dat", "needle_name.txt"]
+    );
+
+    let files_by_content = run(&["-l", "needle", "kind:file"]);
+    assert_eq!(files_by_content.status.code(), Some(0));
+    assert_eq!(
+        normalize_lines(&files_by_content.stdout),
+        vec!["body_only.txt"]
+    );
+
+    let explicit_content = run(&["-l", "-e", "needle", "kind:file"]);
+    assert_eq!(explicit_content.status.code(), Some(0));
+    assert_eq!(
+        normalize_lines(&explicit_content.stdout),
+        vec!["body_only.txt"]
+    );
+
+    let binaries_by_name = run(&["kind:bin", "needle"]);
+    assert_eq!(binaries_by_name.status.code(), Some(0));
+    assert_eq!(
+        normalize_lines(&binaries_by_name.stdout),
+        vec!["needle_bin.dat"]
+    );
+
+    let binaries_by_content = run(&["-l", "needle", "kind:bin"]);
+    assert_eq!(binaries_by_content.status.code(), Some(0));
+    assert_eq!(
+        normalize_lines(&binaries_by_content.stdout),
+        vec!["body_bin.dat"]
+    );
+
+    let text_by_name = run(&["kind:text", "needle"]);
+    assert_eq!(text_by_name.status.code(), Some(0));
+    assert_eq!(
+        normalize_lines(&text_by_name.stdout),
+        vec!["needle_name.txt"]
+    );
+
+    let dirs_by_name = run(&["kind:dir", "needle"]);
+    assert_eq!(dirs_by_name.status.code(), Some(0));
+    assert_eq!(normalize_lines(&dirs_by_name.stdout), vec!["needle_dir/"]);
+
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("body_only.txt", root.join("needle_link")).unwrap();
+        let links_by_name = run(&["kind:link", "needle"]);
+        assert_eq!(links_by_name.status.code(), Some(0));
+        assert_eq!(normalize_lines(&links_by_name.stdout), vec!["needle_link"]);
+
+        let invalid_link_content = run(&["needle", "kind:link"]);
+        assert_eq!(invalid_link_content.status.code(), Some(2));
+        assert!(
+            String::from_utf8_lossy(&invalid_link_content.stderr).contains("content search cannot")
+        );
+    }
+
+    let invalid_dir_content = run(&["needle", "kind:dir"]);
+    assert_eq!(invalid_dir_content.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&invalid_dir_content.stderr).contains("content search cannot"));
+
+    let boolean_name = run(&["kind:file", "needle", "OR", "body"]);
+    assert_eq!(boolean_name.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&boolean_name.stderr)
+            .contains("Put the content pattern before kind:")
+    );
+
+    let strings = run(&["str:4", "kind:bin"]);
+    assert_eq!(strings.status.code(), Some(0));
+    let strings_output = String::from_utf8_lossy(&strings.stdout);
+    assert!(strings_output.contains("body_bin.dat:1:needle"));
+    assert!(strings_output.contains("needle_bin.dat:1:unrelated"));
+}
+
+#[test]
 fn test_acceptance_case_20_head_tail_mutual_exclusivity() {
     let tmp = setup_unified_acceptance_corpus();
     let tmp_path = tmp.path();

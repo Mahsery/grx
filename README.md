@@ -23,19 +23,22 @@ grx unsafe near:5,pointer
 ### Find Files / Directories (omit the search pattern)
 ```bash
 # Find all PDF reports modified in the last 7 days
-grx in:report :pdf newer:7d
+grx in:report t:pdf newer:7d
 
 # Find all directories named 'cache'
-grx kind:dir in:cache
+grx kind:dir cache
+
+# Find regular files named like 'report'
+grx kind:file report
 ```
 
 ### File Operations (with built-in undo)
 ```bash
 # Preview moving matching files
-grx in:test :txt dry: mv:backup/
+grx in:test t:txt dry: mv:backup/
 
 # Move matching files
-grx in:test :txt mv:backup/
+grx in:test t:txt mv:backup/
 
 # Undo the last action
 grx undo
@@ -50,17 +53,17 @@ Instead of chaining multiple command-line flags, `grx` accepts short filter toke
 | Filter | Example | What it does |
 | :--- | :--- | :--- |
 | `p:<path>` | `p:src/` | Search root / starting directory |
-| `:<ext>` or `t:<type>` | `:rs`, `:py`, `t:md` | Include file type or extension |
+| `t:<type>` | `t:rs`, `t:py`, `t:md` | Include file type or extension |
 | `in:<name>` | `in:report` | Match entry filename / basename |
 | `ni:<name>` | `ni:test` | Exclude entry filename / basename |
 | `np:<dir>` | `np:target/` | Exclude directory path segment |
 | `newer:<age>` | `newer:24h`, `newer:7d` | Modified within duration |
 | `older:<age>` | `older:30d` | Modified before duration |
 | `larger:<size>` | `larger:10MB` | File size threshold |
-| `kind:<type>` | `kind:dir`, `kind:file` | Restrict to files, directories, or symlinks |
+| `kind:<type>` | `kind:file`, `kind:bin` | Select file, directory, link, binary, or text entries |
 | `near:<N>,<pat>` | `near:5,token` | Pattern must appear within N lines |
 | `mv:<dir>`, `cp:<dir>` | `mv:dest/`, `cp:backup/` | Move or copy discovered files |
-| `rm:`, `trash:` | `rm:` | Stage matching files into undoable trash |
+| `trash:` | `trash:` | Stage matching files into undoable trash |
 | `dry:` | `dry:` | Preview planned file operations without modifying disk |
 
 Standard flags (`-i`, `-w`, `-F`, `-C <N>`, `-l`, `-c`, `-j <threads>`, etc.) work as expected alongside the inline tokens.
@@ -69,7 +72,7 @@ Standard flags (`-i`, `-w`, `-F`, `-C <N>`, `-l`, `-c`, `-j <threads>`, etc.) wo
 
 ## How It Works
 
-- **Parsing**: The first bare positional argument is treated as the content search pattern (unless omitted, which triggers file discovery mode). Any argument starting with a recognized prefix (`p:`, `in:`, `:`, `newer:`, etc.) is parsed as a scoped filter.
+- **Parsing**: `grx report` searches file contents. `grx kind:file report` finds file names containing `report`; `grx report kind:file` searches contents only in regular files. This order also distinguishes name discovery from content search for `kind:bin` and `kind:text`. `kind:dir` and `kind:link` support name discovery; placing them after a content pattern is an error. Use `-e` before `kind:` to request content search explicitly, and `in:` to filter basenames in either mode.
 - **Directory Traversal**: Uses a work-stealing thread pool (`crossbeam-deque`) respecting `.gitignore` rules. On Linux, it queries directory entries directly using the `SYS_getdents64` syscall to reduce libc overhead.
 - **Search Core**: Files under 64 KB are read via buffered streaming; larger files use memory mapping (`memmap2`). Fast byte scanning (`memchr`) rejects non-matching lines before invoking regular expressions.
 - **Undo Log**: Mutating operations (`mv:`, `cp:`, `rm:`) write an action record to `~/.local/share/grx/` before touching files, allowing `grx undo` to restore or move items back.

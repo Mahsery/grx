@@ -804,7 +804,10 @@ impl DslParser {
         F: Fn(&str, bool) -> SearchPattern,
     {
         let mut pattern_tokens: Vec<Token> = Vec::new();
+        let mut pattern_sources: Vec<String> = Vec::new();
         let has_external = external_expr.is_some();
+        let mut kind_before_pattern = false;
+        let mut explicit_content_pattern = false;
         let mut raw_tokens = Vec::new();
 
         let mut after_double_dash = false;
@@ -858,6 +861,7 @@ impl DslParser {
                         && pattern_tokens.last() == Some(&Token::Not)
                     {
                         pattern_tokens.pop();
+                        pattern_sources.pop();
                         true
                     } else {
                         false
@@ -912,6 +916,9 @@ impl DslParser {
                     }
                 }
                 Token::Kind(k) => {
+                    if pattern_tokens.is_empty() && !has_external && query.fuzzy.is_none() {
+                        kind_before_pattern = true;
+                    }
                     if let Some(existing) = query.kind
                         && existing != *k
                     {
@@ -990,6 +997,7 @@ impl DslParser {
                     // First positional argument is the primary search pattern unless discovery
                     // selectors are active (e.g. `grx in:hosts /etc`).
                     pattern_tokens.push(Token::Pattern(compile(s, false)));
+                    pattern_sources.push(s.clone());
                 }
                 Token::Target(_)
                     if matches!(
@@ -998,6 +1006,7 @@ impl DslParser {
                     ) =>
                 {
                     pattern_tokens.push(Token::Pattern(compile(s, false)));
+                    pattern_sources.push(s.clone());
                 }
                 Token::Target(p) => query.targets.push(crate::config::Config::expand_tilde(p)),
                 Token::SearchHidden(h) => query.search_hidden = Some(*h),
@@ -1019,6 +1028,7 @@ impl DslParser {
                 Token::BinaryStrings(min_len) => {
                     query.binary_strings_min_len = Some(*min_len);
                     query.include_binaries = true;
+                    query.has_content_pattern = true;
                 }
                 Token::Pattern(SearchPattern::Literal { text, .. })
                     if has_external || query.fuzzy.is_some() =>
@@ -1070,7 +1080,19 @@ impl DslParser {
                         .targets
                         .push(crate::config::Config::expand_tilde(PathBuf::from(s)));
                 }
-                tok => pattern_tokens.push(tok.clone()),
+                tok => {
+                    if matches!(tok, Token::Pattern(_))
+                        && (s.starts_with("re:")
+                            || s.starts_with("hex:")
+                            || s.starts_with('@')
+                            || s.starts_with('=')
+                            || (s.starts_with('/') && s.ends_with('/') && s.len() >= 2))
+                    {
+                        explicit_content_pattern = true;
+                    }
+                    pattern_tokens.push(tok.clone());
+                    pattern_sources.push(s.clone());
+                }
             }
             i += 1;
         }
@@ -1079,37 +1101,23 @@ impl DslParser {
             query.expr = Some(expr);
             query.has_content_pattern = true;
         } else if !pattern_tokens.is_empty() {
-            // When filtering exclusively for directories (kind:dir) or symlinks (kind:link),
-            // filesystem entries have no grepable file body. Promote bare positional pattern
-            // tokens to entry basename filters so discovery queries behave ergonomically.
-            let has_boolean_ops = pattern_tokens
-                .iter()
-                .any(|tok| matches!(tok, Token::And | Token::Or | Token::Not));
-
-            if (query.kind == Some(EntryKind::Dir) || query.kind == Some(EntryKind::Link))
-                && query.fuzzy.is_none()
-                && !has_boolean_ops
-            {
-                let mut promoted = false;
-                for tok in &pattern_tokens {
-                    match tok {
-                        Token::Pattern(SearchPattern::Literal { text, .. })
-                        | Token::Pattern(SearchPattern::ExactLiteral(text)) => {
-                            query.basename_includes.push(text.clone());
-                            query.basename_filters.push(BasenameFilter::parse(text));
-                            promoted = true;
-                        }
-                        Token::Pattern(SearchPattern::Regex(re_str)) => {
-                            query.basename_includes.push(re_str.clone());
-                            query.basename_filters.push(BasenameFilter::parse(re_str));
-                            promoted = true;
-                        }
-                        _ => {}
-                    }
+            // A kind named before the first search term asks for entries by name.
+            // A search term before kind: (or an explicit content pattern) keeps grep semantics.
+            if kind_before_pattern && !explicit_content_pattern && query.fuzzy.is_none() {
+                if !query.proximity_filters.is_empty()
+                    || pattern_tokens
+                        .iter()
+                        .any(|tok| !matches!(tok, Token::Pattern(_)))
+                {
+                    return Err("Boolean, negative, and proximity terms search file contents. Put the content pattern before kind:, or use in: filters for entry names.".into());
                 }
-                if !promoted {
-                    query.expr = Some(Self::parse_expression(&pattern_tokens)?);
-                    query.has_content_pattern = true;
+                for (tok, raw) in pattern_tokens.iter().zip(&pattern_sources) {
+                    let name = match tok {
+                        Token::Pattern(SearchPattern::ExactLiteral(text)) => text.as_str(),
+                        _ => raw.as_str(),
+                    };
+                    query.basename_includes.push(name.to_string());
+                    query.basename_filters.push(BasenameFilter::parse(name));
                 }
             } else {
                 query.expr = Some(Self::parse_expression(&pattern_tokens)?);
@@ -3863,7 +3871,20 @@ mod tests {
     }
 
     #[test]
-    fn test_bare_pattern_promotion_under_kind_dir_and_link() {
+    fn test_kind_before_pattern_selects_entry_names() {
+        for kind in ["file", "dir", "link", "bin", "text"] {
+            let q = DslParser::parse([format!("kind:{kind}"), "needle".to_string()]).unwrap();
+            assert!(q.is_discovery(), "kind:{kind} should discover names");
+            assert_eq!(q.basename_includes, vec!["needle"]);
+
+            let q = DslParser::parse(["needle".to_string(), format!("kind:{kind}")]).unwrap();
+            assert!(
+                !q.is_discovery(),
+                "kind:{kind} after the pattern should search contents"
+            );
+            assert!(q.basename_includes.is_empty());
+        }
+
         let q_dir = DslParser::parse(vec!["kind:dir", "np:llvm", "np:unreal", "cpp"]).unwrap();
         assert!(q_dir.is_discovery());
         assert_eq!(q_dir.kind, Some(EntryKind::Dir));
@@ -3877,16 +3898,30 @@ mod tests {
     }
 
     #[test]
-    fn test_boolean_expressions_preserved_under_kind_dir() {
-        let q_or = DslParser::parse(vec!["kind:dir", "alpha", "OR", "beta"]).unwrap();
-        assert!(q_or.expr.is_some());
-        assert!(q_or.has_content_pattern);
-        assert!(q_or.basename_includes.is_empty());
+    fn test_content_only_terms_are_not_silently_used_as_name_filters() {
+        let err = DslParser::parse(["kind:file", "alpha", "OR", "beta"]).unwrap_err();
+        assert!(err.contains("Put the content pattern before kind:"));
 
-        let q_not = DslParser::parse(vec!["kind:dir", "alpha", "NOT", "beta"]).unwrap();
-        assert!(q_not.expr.is_some());
-        assert!(q_not.has_content_pattern);
-        assert!(q_not.basename_includes.is_empty());
+        let err = DslParser::parse(["kind:dir", "alpha", "NOT", "beta"]).unwrap_err();
+        assert!(err.contains("Put the content pattern before kind:"));
+
+        let err = DslParser::parse(["kind:file", "alpha", "ns:debug"]).unwrap_err();
+        assert!(err.contains("Put the content pattern before kind:"));
+
+        let q = DslParser::parse(["alpha", "OR", "beta", "kind:file"]).unwrap();
+        assert!(!q.is_discovery());
+
+        let q = DslParser::parse(["kind:file", "re:alpha"]).unwrap();
+        assert!(!q.is_discovery());
+
+        let q = DslParser::parse(["kind:bin", "str:4"]).unwrap();
+        assert!(!q.is_discovery());
+        assert_eq!(q.binary_strings_min_len, Some(4));
+
+        let q = DslParser::parse(["kind:file", "needle", "src"]).unwrap();
+        assert!(q.is_discovery());
+        assert_eq!(q.basename_includes, vec!["needle"]);
+        assert_eq!(q.targets, vec![PathBuf::from("src")]);
     }
 
     #[test]
