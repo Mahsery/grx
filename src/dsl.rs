@@ -251,6 +251,55 @@ impl BasenameFilter {
 
         true
     }
+
+    /// Byte ranges of the literal parts that made this basename match.
+    /// This is only used when rendering discovery output; candidate filtering
+    /// keeps using the allocation-free `matches` path.
+    pub fn match_spans(
+        &self,
+        basename: &[u8],
+        case_override: Option<bool>,
+    ) -> Option<Vec<(usize, usize)>> {
+        if !self.matches(basename, case_override) {
+            return None;
+        }
+        let cs = case_override.unwrap_or(self.is_case_sensitive);
+        if self.parts.is_empty() || self.parts[0].is_empty() {
+            return Some(Vec::new());
+        }
+        if self.parts.len() == 1 {
+            let part = &self.parts[0];
+            if self.is_exact || self.start_anchored {
+                return Some(vec![(0, part.len())]);
+            }
+            if self.end_anchored {
+                return Some(vec![(basename.len() - part.len(), basename.len())]);
+            }
+            let mut spans = Vec::new();
+            let mut offset = 0;
+            while let Some(pos) = find_subslice(&basename[offset..], part, cs) {
+                let start = offset + pos;
+                offset = start + part.len();
+                spans.push((start, offset));
+            }
+            return Some(spans);
+        }
+
+        let mut spans = Vec::with_capacity(self.parts.len());
+        let mut offset = 0;
+        for (i, part) in self.parts.iter().enumerate() {
+            let start = if i == 0 && self.start_anchored {
+                0
+            } else if i == self.parts.len() - 1 && self.end_anchored {
+                basename.len() - part.len()
+            } else {
+                offset + find_subslice(&basename[offset..], part, cs)?
+            };
+            offset = start + part.len();
+            spans.push((start, offset));
+        }
+        Some(spans)
+    }
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8], case_sensitive: bool) -> Option<usize> {

@@ -696,6 +696,7 @@ impl Engine {
                 allow_binary,
             )
             .with_colors(self.config.output.colors.clone())
+            .with_basename_highlights(query.basename_filters.clone(), query.case_sensitive)
             .with_raw_binary_text(raw_binary_text)
             .with_column(show_column)
             .with_byte_offset(show_byte_offset)

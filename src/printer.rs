@@ -1,5 +1,6 @@
 use crate::config::{ColorChoice, HyperlinkChoice};
 use crate::core::{DirEntry, EntrySink, MatchRecord, Printer};
+use crate::dsl::BasenameFilter;
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 
@@ -29,6 +30,8 @@ pub struct OutputFormatter {
     raw_binary_text: bool,
     json_bytes_printed: u64,
     pub colors: crate::config::ColorTheme,
+    basename_filters: Vec<BasenameFilter>,
+    basename_case_sensitive: Option<bool>,
 }
 
 #[inline]
@@ -188,6 +191,63 @@ fn get_fd_file_style(path: &Path, file_name: &str) -> (&'static str, &'static st
 }
 
 impl OutputFormatter {
+    fn styled_basename(
+        &self,
+        name: &str,
+        trailing: &str,
+        prefix: &str,
+        suffix: &str,
+        can_highlight: bool,
+    ) -> String {
+        let mut spans = Vec::new();
+        if can_highlight {
+            for filter in &self.basename_filters {
+                if let Some(found) =
+                    filter.match_spans(name.as_bytes(), self.basename_case_sensitive)
+                {
+                    spans.extend(found.into_iter().filter(|&(start, end)| {
+                        name.is_char_boundary(start) && name.is_char_boundary(end)
+                    }));
+                }
+            }
+        }
+        if spans.is_empty() {
+            return format!("{prefix}{name}{trailing}{suffix}");
+        }
+        spans.sort_unstable();
+        let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
+        for (start, end) in spans {
+            if let Some(last) = merged.last_mut()
+                && start <= last.1
+            {
+                last.1 = last.1.max(end);
+                continue;
+            }
+            merged.push((start, end));
+        }
+
+        let mut styled = String::new();
+        let mut offset = 0;
+        for (start, end) in merged {
+            if start > offset {
+                styled.push_str(prefix);
+                styled.push_str(&name[offset..start]);
+                styled.push_str(suffix);
+            }
+            styled.push_str(&self.colors.match_highlight);
+            styled.push_str(&name[start..end]);
+            styled.push_str("\x1b[0m");
+            offset = end;
+        }
+        if offset < name.len() || !trailing.is_empty() {
+            styled.push_str(prefix);
+            styled.push_str(&name[offset..]);
+            styled.push_str(trailing);
+            styled.push_str(suffix);
+        }
+        styled
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         writer: Box<dyn Write + Send + Sync>,
@@ -233,6 +293,8 @@ impl OutputFormatter {
             raw_binary_text: false,
             json_bytes_printed: 0,
             colors: crate::config::ColorTheme::default(),
+            basename_filters: Vec::new(),
+            basename_case_sensitive: None,
         }
     }
 
@@ -246,6 +308,16 @@ impl OutputFormatter {
 
     pub fn with_colors(mut self, colors: crate::config::ColorTheme) -> Self {
         self.colors = colors;
+        self
+    }
+
+    pub fn with_basename_highlights(
+        mut self,
+        filters: Vec<BasenameFilter>,
+        case_sensitive: Option<bool>,
+    ) -> Self {
+        self.basename_filters = filters;
+        self.basename_case_sensitive = case_sensitive;
         self
     }
 
@@ -1042,17 +1114,29 @@ impl OutputFormatter {
                 format!("\x1b[38;5;81m{parent_display}\x1b[0m")
             };
 
+            let can_highlight = path.file_name().and_then(|name| name.to_str()).is_some();
             if is_dir {
-                format!("{dim_parent}\x1b[38;5;81m{file_name}/\x1b[0m")
+                let name = self.styled_basename(
+                    &file_name,
+                    "/",
+                    "\x1b[38;5;81m",
+                    "\x1b[0m",
+                    can_highlight,
+                );
+                format!("{dim_parent}{name}")
             } else if is_symlink {
-                format!("{dim_parent}\x1b[38;5;203m{file_name}\x1b[0m")
+                let name = self.styled_basename(
+                    &file_name,
+                    "",
+                    "\x1b[38;5;203m",
+                    "\x1b[0m",
+                    can_highlight,
+                );
+                format!("{dim_parent}{name}")
             } else {
                 let (prefix, suffix) = get_fd_file_style(path, &file_name);
-                if prefix.is_empty() {
-                    format!("{dim_parent}{file_name}")
-                } else {
-                    format!("{dim_parent}{prefix}{file_name}{suffix}")
-                }
+                let name = self.styled_basename(&file_name, "", prefix, suffix, can_highlight);
+                format!("{dim_parent}{name}")
             }
         } else if is_dir {
             format!("{clean}/")
@@ -1693,6 +1777,8 @@ impl OutputFormatter {
             raw_binary_text: self.raw_binary_text,
             json_bytes_printed: 0,
             colors: self.colors.clone(),
+            basename_filters: self.basename_filters.clone(),
+            basename_case_sensitive: self.basename_case_sensitive,
         }
     }
 
@@ -1764,6 +1850,8 @@ impl Default for OutputFormatter {
             raw_binary_text: false,
             json_bytes_printed: 0,
             colors: crate::config::ColorTheme::default(),
+            basename_filters: Vec::new(),
+            basename_case_sensitive: None,
         }
     }
 }
