@@ -6634,6 +6634,15 @@ fn reported_stdin(args: &[&str], input: &[u8]) -> std::process::Output {
         .spawn()
         .unwrap();
     child.stdin.take().unwrap().write_all(input).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while child.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("CLI regression exceeded ten seconds: {args:?}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
     child.wait_with_output().unwrap()
 }
 
@@ -6752,4 +6761,20 @@ fn reported_long_boolean_expressions_return_errors() {
     let out = reported_stdin(&patterns, b"alpha\n");
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("complexity"));
+}
+
+#[test]
+fn reported_fuzzy_repetitive_matches_complete_with_correct_spans() {
+    let pattern = format!("fz:{}", "a".repeat(4000));
+    for input in [format!("{}\n", "a".repeat(4000))] {
+        for (flag, expected) in [
+            ("-q", Vec::new()),
+            ("-o", format!("{}\n", "a".repeat(4000)).into_bytes()),
+            ("--count-matches", b"1\n".to_vec()),
+        ] {
+            let out = reported_stdin(&[flag, &pattern], input.as_bytes());
+            assert_eq!(out.status.code(), Some(0), "{flag}: {:?}", out.stderr);
+            assert_eq!(out.stdout, expected);
+        }
+    }
 }

@@ -10,7 +10,7 @@ struct State {
     score: i32,
     end: usize,
     start: usize,
-    previous_end: Option<usize>,
+    trace: Option<usize>,
 }
 
 pub struct FuzzyMatcher {
@@ -42,7 +42,7 @@ impl FuzzyMatcher {
         if !self.is_subsequence(text) {
             return None;
         }
-        self.best(text, self.pattern.len(), false)
+        self.best(text, self.pattern.len(), &mut None)
             .map(|state| state.score)
     }
 
@@ -54,7 +54,7 @@ impl FuzzyMatcher {
         if !self.is_subsequence(text) {
             return None;
         }
-        let state = self.best(text, self.pattern.len(), false)?;
+        let state = self.best(text, self.pattern.len(), &mut None)?;
         Some((
             state.start,
             state.end + text[state.end..].chars().next()?.len_utf8(),
@@ -68,18 +68,20 @@ impl FuzzyMatcher {
         if self.pattern.is_empty() || !self.is_subsequence(text) {
             return;
         }
-        let Some(mut state) = self.best(text, self.pattern.len(), false) else {
+        let mut trace = Some(Vec::new());
+        let Some(state) = self.best(text, self.pattern.len(), &mut trace) else {
             return;
         };
+        let trace = trace.unwrap();
+        let mut node = state.trace;
         let mut selected = Vec::with_capacity(self.pattern.len());
-        for length in (1..=self.pattern.len()).rev() {
-            let start = state.end;
-            let end = start + text[start..].chars().next().unwrap().len_utf8();
-            selected.push((start, end));
-            if let Some(previous) = state.previous_end {
-                let prefix_end = previous + text[previous..].chars().next().unwrap().len_utf8();
-                state = self.best(&text[..prefix_end], length - 1, true).unwrap();
-            }
+        while let Some(index) = node {
+            let (start, previous) = trace[index];
+            selected.push((
+                start,
+                start + text[start..].chars().next().unwrap().len_utf8(),
+            ));
+            node = previous;
         }
         selected.reverse();
         for (start, end) in selected {
@@ -126,19 +128,45 @@ impl FuzzyMatcher {
         false
     }
 
-    fn best(&self, text: &str, length: usize, endpoint: bool) -> Option<State> {
+    fn best(
+        &self,
+        text: &str,
+        length: usize,
+        trace: &mut Option<Vec<(usize, Option<usize>)>>,
+    ) -> Option<State> {
+        if text.chars().count() == length && self.is_subsequence(text) {
+            let mut state = State {
+                score: 0,
+                start: 0,
+                end: 0,
+                trace: None,
+            };
+            let mut previous = None;
+            for (index, (offset, ch)) in text.char_indices().enumerate() {
+                let bonus = boundary_bonus(previous, ch);
+                state.score = state.score.saturating_add(
+                    MATCH
+                        + if index == 0 {
+                            bonus * 2
+                        } else {
+                            bonus.max(CONSECUTIVE)
+                        },
+                );
+                state.end = offset;
+                if let Some(trace) = trace {
+                    trace.push((offset, state.trace));
+                    state.trace = Some(trace.len() - 1);
+                }
+                previous = Some(ch);
+            }
+            return Some(state);
+        }
         let mut adjacent = vec![None::<State>; length];
         let mut gaps = vec![None::<State>; length];
         let mut best = None;
         let mut previous_char: Option<char> = None;
         for (offset, ch) in text.char_indices() {
-            let bonus = match previous_char {
-                None => 8,
-                Some(prev) if !prev.is_alphanumeric() => 8,
-                Some(prev) if prev.is_lowercase() && ch.is_uppercase() => 7,
-                Some(prev) if prev.is_alphabetic() && ch.is_numeric() => 7,
-                _ => 0,
-            };
+            let bonus = boundary_bonus(previous_char, ch);
             for index in (0..length).rev() {
                 let old_adjacent = adjacent[index];
                 let old_gap = gaps[index];
@@ -149,7 +177,7 @@ impl FuzzyMatcher {
                             score: MATCH + bonus * 2,
                             end: offset,
                             start: offset,
-                            previous_end: None,
+                            trace: None,
                         });
                     } else {
                         for (prior, consecutive) in
@@ -165,12 +193,16 @@ impl FuzzyMatcher {
                                     score: prior.score.saturating_add(MATCH + reward),
                                     end: offset,
                                     start: prior.start,
-                                    previous_end: Some(prior.end),
+                                    trace: prior.trace,
                                 };
                                 choose(&mut matched, state);
                             }
                         }
                     }
+                }
+                if let (Some(state), Some(trace)) = (&mut matched, &mut *trace) {
+                    trace.push((offset, state.trace));
+                    state.trace = Some(trace.len() - 1);
                 }
                 adjacent[index] = matched;
                 let mut next_gap = None;
@@ -189,7 +221,17 @@ impl FuzzyMatcher {
             }
             previous_char = Some(ch);
         }
-        if endpoint { adjacent[length - 1] } else { best }
+        best
+    }
+}
+
+fn boundary_bonus(previous: Option<char>, ch: char) -> i32 {
+    match previous {
+        None => 8,
+        Some(prev) if !prev.is_alphanumeric() => 8,
+        Some(prev) if prev.is_lowercase() && ch.is_uppercase() => 7,
+        Some(prev) if prev.is_alphabetic() && ch.is_numeric() => 7,
+        _ => 0,
     }
 }
 
