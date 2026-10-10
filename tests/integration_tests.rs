@@ -6897,3 +6897,90 @@ fn reported_json_preserves_source_bytes_terminators_offsets_and_size() {
         serde_json::json!([{"start":0,"end":1,"match":{"bytes":"/w=="}}])
     );
 }
+
+#[test]
+#[cfg(unix)]
+fn reported_compatibility_consumes_frontend_options_at_any_position() {
+    let tmp = tempdir().unwrap();
+    fs::write(
+        tmp.path().join("input.txt"),
+        b"Needle\nother\n--mode\n--config\n",
+    )
+    .unwrap();
+    fs::write(tmp.path().join("config.toml"), b"mode = \"grep\"\n").unwrap();
+    for args in [
+        vec!["--mode", "grep", "-i", "needle", "input.txt"],
+        vec!["-i", "needle", "input.txt", "--mode", "grep"],
+        vec!["-i", "needle", "input.txt", "--mode=grep"],
+        vec!["--config", "config.toml", "-i", "needle", "input.txt"],
+        vec!["-i", "needle", "input.txt", "--config=config.toml"],
+    ] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
+            .current_dir(tmp.path())
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "{args:?}: {:?}", out.stderr);
+        assert_eq!(out.stdout, b"Needle\n");
+        assert!(out.stderr.is_empty());
+    }
+    for pattern in ["--mode", "--config"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
+            .current_dir(tmp.path())
+            .args(["--mode", "grep", "-e", pattern, "input.txt"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0));
+        assert_eq!(out.stdout, format!("{pattern}\n").as_bytes());
+    }
+    fs::write(tmp.path().join("--config=decoy"), b"Needle\n").unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
+        .current_dir(tmp.path())
+        .args(["--mode", "grep", "Needle", "--", "--config=decoy"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(out.stdout, b"Needle\n");
+}
+
+#[test]
+fn reported_selected_environment_config_errors_are_visible() {
+    let tmp = tempdir().unwrap();
+    fs::write(tmp.path().join("invalid.toml"), b"This is not TOML\n").unwrap();
+    fs::write(tmp.path().join("input.txt"), b"needle\n").unwrap();
+    fs::write(
+        tmp.path().join("valid.toml"),
+        b"[search]\nfixed-strings = true\n",
+    )
+    .unwrap();
+    for config in ["invalid.toml", "missing.toml"] {
+        for args in [vec!["needle", "root:input.txt"], vec!["--config-path"]] {
+            let out = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
+                .current_dir(tmp.path())
+                .env("GRX_CONFIG", config)
+                .args(&args)
+                .output()
+                .unwrap();
+            assert_eq!(out.status.code(), Some(2), "{config} {args:?}");
+            assert!(out.stdout.is_empty());
+            assert!(String::from_utf8_lossy(&out.stderr).contains(config));
+        }
+    }
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
+        .current_dir(tmp.path())
+        .env("GRX_CONFIG", "invalid.toml")
+        .args([
+            "--config",
+            "valid.toml",
+            "--color=never",
+            "--no-heading",
+            "-I",
+            "-N",
+            "needle",
+            "root:input.txt",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(out.stdout, b"needle\n");
+}

@@ -10,14 +10,14 @@ pub trait CommandBackend {
     }
 }
 
-pub struct CompatibilityCommand<'a> {
+pub struct CompatibilityCommand {
     program: &'static str,
     prefix: &'static [&'static str],
-    args: &'a [OsString],
+    args: Vec<OsString>,
 }
 
-impl<'a> CompatibilityCommand<'a> {
-    pub fn from_args(args: &'a [OsString]) -> Option<Self> {
+impl CompatibilityCommand {
+    pub fn from_args(args: &[OsString]) -> Option<Self> {
         let first = args.first()?;
         let (mode, rest) = if first == "--mode" {
             (args.get(1)?.as_os_str(), &args[2..])
@@ -33,11 +33,11 @@ impl<'a> CompatibilityCommand<'a> {
         Some(Self {
             program,
             prefix,
-            args: rest,
+            args: backend_args(rest),
         })
     }
 
-    pub fn for_mode(mode_name: &str, args: &'a [OsString]) -> Option<Self> {
+    pub fn for_mode(mode_name: &str, args: &[OsString]) -> Option<Self> {
         let (program, prefix): (_, &'static [&'static str]) = match mode_name {
             "grep" | "posix" => ("grep", &[]),
             "git-grep" => ("git", &["grep"]),
@@ -46,17 +46,62 @@ impl<'a> CompatibilityCommand<'a> {
         Some(Self {
             program,
             prefix,
-            args,
+            args: backend_args(args),
         })
     }
 }
 
-impl CommandBackend for CompatibilityCommand<'_> {
+impl CommandBackend for CompatibilityCommand {
     fn command(&self) -> Command {
         let mut command = Command::new(self.program);
-        command.args(self.prefix).args(self.args);
+        command.args(self.prefix).args(&self.args);
         command
     }
+}
+
+fn backend_args(args: &[OsString]) -> Vec<OsString> {
+    let mut output = Vec::new();
+    let mut index = 0;
+    while let Some(arg) = args.get(index) {
+        if arg == "--" {
+            output.extend_from_slice(&args[index..]);
+            break;
+        }
+        let text = arg.to_str().unwrap_or("");
+        if text == "--mode" || text == "--config" {
+            index += 2;
+            continue;
+        }
+        if text.starts_with("--mode=") || text.starts_with("--config=") {
+            index += 1;
+            continue;
+        }
+        output.push(arg.clone());
+        index += 1;
+        if matches!(
+            text,
+            "-e" | "-f"
+                | "-m"
+                | "-A"
+                | "-B"
+                | "-C"
+                | "--regexp"
+                | "--file"
+                | "--max-count"
+                | "--after-context"
+                | "--before-context"
+                | "--context"
+                | "--include"
+                | "--exclude"
+                | "--exclude-dir"
+                | "--label"
+        ) && let Some(value) = args.get(index)
+        {
+            output.push(value.clone());
+            index += 1;
+        }
+    }
+    output
 }
 
 #[cfg(test)]

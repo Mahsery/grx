@@ -43,7 +43,10 @@ fn main() -> ExitCode {
         }
     }
 
-    let config = if let Some(path) = custom_config {
+    let environment_config = std::env::var_os("GRX_CONFIG")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from);
+    let config = if let Some(path) = custom_config.or(environment_config.as_deref()) {
         match Config::load_explicit(path) {
             Ok(config) => config,
             Err(err) => {
