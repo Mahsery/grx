@@ -6626,7 +6626,12 @@ fn reported_action_plans_reject_collisions_and_impossible_destinations() {
 fn reported_stdin(args: &[&str], input: &[u8]) -> std::process::Output {
     use std::io::Write;
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
-        .args(["--color=never", "--no-heading", "-I", "-N"])
+        .args(["--color=never", "--no-heading", "-I"])
+        .args(if args.contains(&"-n") {
+            Vec::new()
+        } else {
+            vec!["-N"]
+        })
         .args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -6776,5 +6781,50 @@ fn reported_fuzzy_repetitive_matches_complete_with_correct_spans() {
             assert_eq!(out.status.code(), Some(0), "{flag}: {:?}", out.stderr);
             assert_eq!(out.stdout, expected);
         }
+    }
+}
+
+#[test]
+fn reported_hex_context_and_counts_use_source_lines() {
+    let out = reported_stdin(&["hex:62", "ctx:1", "-n"], b"a\nb\nc\n");
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(out.stdout, b"1-a\n2:b\n3-c\n");
+    for (flag, expected) in [
+        ("-c", b"1\n".as_slice()),
+        ("--count-matches", b"3\n".as_slice()),
+        ("-o", b"b\nb\nb\n".as_slice()),
+    ] {
+        let out = reported_stdin(&["hex:62", flag], b"bbb\n");
+        assert_eq!(out.status.code(), Some(0));
+        assert_eq!(out.stdout, expected);
+    }
+    let out = reported_stdin(&["hex:62", "-n", "-b", "--column"], b"a\nb\nc\n");
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(out.stdout, b"2:1:2:b\n");
+}
+
+#[test]
+fn reported_binary_text_preserves_extraction_and_positions() {
+    for input in [b"xx\0needleZZ\n".as_slice(), b"xxneedleZZ\n".as_slice()] {
+        let out = reported_stdin(&["-a", "-o", "needle"], input);
+        assert_eq!(out.status.code(), Some(0));
+        assert_eq!(out.stdout, b"needle\n");
+    }
+    let out = reported_stdin(&["-a", "-n", "--column", "-b", "needle"], b"xx\0needleZZ\n");
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(out.stdout, b"1:4:0:xx\0needleZZ\n");
+}
+
+#[test]
+fn reported_max_columns_counts_characters() {
+    for (input, expected) in [
+        ("ééé\n", "éé ... [omitted 2 bytes]\n"),
+        ("eee\n", "ee ... [omitted 1 bytes]\n"),
+    ] {
+        let out = reported_stdin(&["-M", "2", "lit:"], input.as_bytes());
+        assert_eq!(out.status.code(), Some(0));
+        assert_eq!(out.stdout, expected.as_bytes());
+        let full = reported_stdin(&["-M", "2", "--no-truncate", "lit:"], input.as_bytes());
+        assert_eq!(full.stdout, input.as_bytes());
     }
 }

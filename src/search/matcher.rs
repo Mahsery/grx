@@ -453,17 +453,43 @@ impl Matcher for HexMatcher {
 
         let mut count = 0;
         let mut cursor = 0;
-
+        let mut current: Option<MatchRecord<'a>> = None;
+        let mut previous_offset = 0;
+        let mut previous_line = 1;
         while let Some(offset) = self.find_from(buffer, cursor) {
-            let record = MatchRecord::new(
-                offset + 1,
-                offset,
-                &buffer[offset..(offset + self.pattern.len()).min(buffer.len())],
-                vec![(0, self.pattern.len())],
-            );
-            sink.on_match(record)?;
+            let (start, end, number) =
+                find_line_bounds(buffer, offset, previous_offset, previous_line);
+            let match_end = offset + self.pattern.len();
+            if match_end > end {
+                return Err(io::Error::other(
+                    "Hex matches spanning line separators are unsupported",
+                ));
+            }
+            previous_offset = start;
+            previous_line = number;
+            let span = (offset - start, match_end - start);
+            if let Some(record) = current
+                .as_mut()
+                .filter(|record| record.line_byte_offset == start)
+            {
+                record.match_spans.push(span);
+                record.occurrence_count += 1;
+            } else {
+                if let Some(record) = current.take() {
+                    sink.on_match(record)?;
+                }
+                current = Some(MatchRecord::new(
+                    number,
+                    start,
+                    &buffer[start..end],
+                    vec![span],
+                ));
+            }
             count += 1;
-            cursor = offset + self.pattern.len();
+            cursor = match_end;
+        }
+        if let Some(record) = current {
+            sink.on_match(record)?;
         }
 
         Ok(count)

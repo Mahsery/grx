@@ -497,8 +497,9 @@ mod tests {
         let count = matcher.find_matches(data, &mut sink).unwrap();
 
         assert_eq!(count, 1);
-        assert_eq!(sink.matches[0].line_byte_offset, 8);
-        assert_eq!(sink.matches[0].line_number, 9);
+        assert_eq!(sink.matches[0].line_byte_offset, 0);
+        assert_eq!(sink.matches[0].line_number, 1);
+        assert_eq!(sink.matches[0].match_spans, vec![(8, 11)]);
 
         let zero_pat = vec![Some(0x7F), Some(0x45)];
         let zero_matcher = HexMatcher::new(zero_pat);

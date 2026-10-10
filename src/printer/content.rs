@@ -42,19 +42,23 @@ impl OutputFormatter {
                 .unwrap_or(if self.is_tty { 1000 } else { 0 })
         };
         let (mut start, mut end) = (0, line_bytes.len());
-        if limit > 0 && line_bytes.len() > limit {
+        let boundaries: Vec<usize> = if limit > 0 {
+            (0..line_bytes.len())
+                .filter(|&index| is_utf8_char_boundary(line_bytes[index]))
+                .chain(std::iter::once(line_bytes.len()))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if limit > 0 && boundaries.len().saturating_sub(1) > limit {
             let (first, last, _) = spans.first().copied().unwrap_or((0, 0, SpanKind::Primary));
             let mid = first + last.saturating_sub(first) / 2;
-            start = mid
+            let middle = boundaries.partition_point(|&offset| offset < mid);
+            let first = middle
                 .saturating_sub(limit / 2)
-                .min(line_bytes.len().saturating_sub(limit));
-            end = start.saturating_add(limit).min(line_bytes.len());
-            while start > 0 && !is_utf8_char_boundary(line_bytes[start]) {
-                start -= 1;
-            }
-            while end < line_bytes.len() && !is_utf8_char_boundary(line_bytes[end]) {
-                end += 1;
-            }
+                .min(boundaries.len() - 1 - limit);
+            start = boundaries[first];
+            end = boundaries[first + limit];
         }
         let (text, offsets) = render_text(&line_bytes[start..end], self.is_tty);
         let prefix = if start > 0 {
@@ -461,7 +465,8 @@ impl OutputFormatter {
                 }
                 last_line = m.line_number;
 
-                let is_binary_match = memchr::memchr(0x00, m.line_bytes).is_some();
+                let is_binary_match =
+                    !self.raw_binary_text && memchr::memchr(0x00, m.line_bytes).is_some();
 
                 let mut spans_with_kinds: Vec<(usize, usize, SpanKind)> = Vec::new();
                 for &(s, e) in &m.match_spans {
@@ -658,7 +663,8 @@ impl OutputFormatter {
                 }
                 last_line = m.line_number;
 
-                let is_binary_match = memchr::memchr(0x00, m.line_bytes).is_some();
+                let is_binary_match =
+                    !self.raw_binary_text && memchr::memchr(0x00, m.line_bytes).is_some();
 
                 let mut spans_with_kinds: Vec<(usize, usize, SpanKind)> = Vec::new();
                 for &(s, e) in &m.match_spans {
