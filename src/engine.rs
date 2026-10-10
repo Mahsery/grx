@@ -246,6 +246,7 @@ impl CompiledPathPredicate {
 
 #[derive(Clone)]
 enum CompiledEntryPredicate {
+    Glob(String),
     Path(CompiledPathPredicate),
     Type {
         patterns: Vec<String>,
@@ -332,6 +333,7 @@ fn compile_selector(
             crate::dsl::EntryPredicate::Path(raw) => {
                 CompiledEntryPredicate::Path(CompiledPathPredicate::new(raw, case, cwd, roots)?)
             }
+            crate::dsl::EntryPredicate::Glob(raw) => CompiledEntryPredicate::Glob(raw.clone()),
             crate::dsl::EntryPredicate::Type(raw) => CompiledEntryPredicate::Type {
                 patterns: config
                     .types
@@ -378,6 +380,20 @@ fn selector_matches(
     };
     match expr {
         BoolExpr::Pattern(CompiledEntryPredicate::Path(path)) => path.matches(entry, cwd),
+        BoolExpr::Pattern(CompiledEntryPredicate::Glob(pattern)) => {
+            let path = entry.full_path();
+            let relative = path.strip_prefix(cwd).unwrap_or(&path);
+            let target = if pattern.contains('/') || pattern.contains('\\') {
+                relative
+                    .strip_prefix(".")
+                    .unwrap_or(relative)
+                    .as_os_str()
+                    .as_encoded_bytes()
+            } else {
+                &entry.name
+            };
+            crate::ignore::glob_match_bytes(pattern.as_bytes(), target)
+        }
         BoolExpr::Pattern(CompiledEntryPredicate::Type {
             patterns,
             case_sensitive,
@@ -2177,30 +2193,33 @@ impl Engine {
         }
         let type_atom =
             |value: &str| BoolExpr::Pattern(crate::dsl::EntryPredicate::Type(value.to_owned()));
-        let include_types = self
+        if let Some(types) = self
             .cli
             .file_type
             .iter()
             .map(|value| type_atom(value))
-            .chain(
-                self.cli
-                    .glob
-                    .iter()
-                    .filter(|value| !value.starts_with('!'))
-                    .map(|value| type_atom(value)),
-            )
-            .reduce(|a, b| BoolExpr::Or(Box::new(a), Box::new(b)));
-        if let Some(types) = include_types {
+            .reduce(|a, b| BoolExpr::Or(Box::new(a), Box::new(b)))
+        {
             base_query.constrain(types);
         }
         for value in &self.cli.file_type_not {
             base_query.constrain(BoolExpr::Not(Box::new(type_atom(value))));
         }
+        let glob_atom =
+            |value: &str| BoolExpr::Pattern(crate::dsl::EntryPredicate::Glob(value.into()));
+        if let Some(globs) = self
+            .cli
+            .glob
+            .iter()
+            .filter(|value| !value.starts_with('!'))
+            .map(|value| glob_atom(value))
+            .reduce(|a, b| BoolExpr::Or(Box::new(a), Box::new(b)))
+        {
+            base_query.constrain(globs);
+        }
         for value in &self.cli.glob {
             if let Some(negative) = value.strip_prefix('!') {
-                base_query.constrain(BoolExpr::Not(Box::new(BoolExpr::Pattern(
-                    crate::dsl::EntryPredicate::Path(negative.to_owned()),
-                ))));
+                base_query.constrain(BoolExpr::Not(Box::new(glob_atom(negative))));
             }
         }
 

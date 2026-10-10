@@ -74,6 +74,7 @@ pub type SelectorExpr = BoolExpr<EntryPredicate>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntryPredicate {
     Path(String),
+    Glob(String),
     Type(String),
     Size(SizePredicate),
     Time(TimePredicate),

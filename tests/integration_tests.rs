@@ -6502,3 +6502,58 @@ fn reported_procfs_reads_ignore_mmap_threshold() {
         assert_eq!(out.stdout, expected);
     }
 }
+
+#[test]
+fn reported_globs_filter_paths_directories_and_types() {
+    let tmp = tempdir().unwrap();
+    fs::create_dir(tmp.path().join("src")).unwrap();
+    fs::write(tmp.path().join("src/main.rs"), b"version\n").unwrap();
+    fs::write(tmp.path().join("src/settings.toml"), b"version\n").unwrap();
+    fs::write(tmp.path().join("Cargo.toml"), b"version\n").unwrap();
+    for (args, expected) in [
+        (
+            vec!["kind:file", "-g", "!*.rs", "root:src"],
+            "src/settings.toml\n",
+        ),
+        (vec!["kind:file", "-g", "!Cargo*", "root:Cargo.toml"], ""),
+        (
+            vec!["kind:file", "-g", "*.rs", "-g", "!src/*", "root:src"],
+            "",
+        ),
+        (
+            vec!["kind:file", "-g", "src/*.rs", "root:."],
+            "src/main.rs\n",
+        ),
+        (vec!["kind:dir", "-g", "src*", "root:."], "src/\n"),
+        (
+            vec!["kind:file", "-g", "Cargo.?oml", "root:Cargo.toml"],
+            "Cargo.toml\n",
+        ),
+        (
+            vec!["kind:file", "-t", "rs", "-g", "*.toml", "root:src"],
+            "",
+        ),
+        (
+            vec!["version", "-t", "rs", "-g", "*.toml", "root:Cargo.toml"],
+            "",
+        ),
+        (
+            vec!["version", "t:rs", "-g", "*.toml", "root:Cargo.toml"],
+            "",
+        ),
+    ] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
+            .current_dir(tmp.path())
+            .args(["--color=never", "sort:path"])
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(if expected.is_empty() { 1 } else { 0 }),
+            "{args:?}: {:?}",
+            out.stderr
+        );
+        assert_eq!(out.stdout, expected.as_bytes(), "{args:?}");
+    }
+}
