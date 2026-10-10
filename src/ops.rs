@@ -383,6 +383,12 @@ pub fn plan_action(
                     .map(|f| f.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 let new_name = name.replace(pattern, replacement);
+                if new_name.is_empty()
+                    || Path::new(&new_name).file_name().is_none()
+                    || Path::new(&new_name).components().count() != 1
+                {
+                    return Err(format!("Invalid rename destination '{new_name}'"));
+                }
                 if new_name != name {
                     let parent = entry.parent().unwrap_or_else(|| Path::new(""));
                     let new_path = parent.join(&new_name);
@@ -440,6 +446,8 @@ pub fn plan_action(
         }
     }
 
+    validate_destinations(&ops)?;
+
     Ok(OperationPlan {
         tx_id,
         action: action.clone(),
@@ -449,7 +457,61 @@ pub fn plan_action(
     })
 }
 
+fn validate_destinations(ops: &[FileOp]) -> Result<(), String> {
+    let mut destinations = std::collections::HashSet::new();
+    for op in ops {
+        let (source, destination) = match op {
+            FileOp::Move { src, dst, .. } | FileOp::Copy { src, dst, .. } => (src, dst),
+            FileOp::Rename { old_path, new_path } => (old_path, new_path),
+            _ => continue,
+        };
+        let parent = destination.parent().ok_or("Destination has no parent")?;
+        for ancestor in parent.ancestors() {
+            match fs::metadata(ancestor) {
+                Ok(metadata) if !metadata.is_dir() => {
+                    return Err(format!(
+                        "Destination parent '{}' is not a directory",
+                        ancestor.display()
+                    ));
+                }
+                Ok(_) => break,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                    ) =>
+                {
+                    continue;
+                }
+                Err(error) => {
+                    return Err(format!("Cannot inspect '{}': {error}", ancestor.display()));
+                }
+            }
+        }
+        let resolved = destination.canonicalize().unwrap_or_else(|_| {
+            parent
+                .canonicalize()
+                .unwrap_or_else(|_| parent.to_path_buf())
+                .join(destination.file_name().unwrap_or_default())
+        });
+        if is_same_path(source, &resolved) {
+            return Err(format!(
+                "Source and destination are the same: '{}'",
+                source.display()
+            ));
+        }
+        if !destinations.insert(resolved) {
+            return Err(format!(
+                "Multiple sources share destination '{}'",
+                destination.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn execute_plan(plan: &OperationPlan) -> Result<Transaction, String> {
+    validate_destinations(&plan.ops)?;
     if plan.has_conflicts() && !plan.force {
         return Err(format!(
             "Cannot execute action: {} conflict(s) detected. Rerun with --force or fix conflicts.",

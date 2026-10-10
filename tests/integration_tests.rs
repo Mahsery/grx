@@ -3815,7 +3815,7 @@ fn test_cli_action_flags_move_copy_trash_and_clean_trash() {
             dest_dir.to_str().unwrap(),
             "-l",
             "needle",
-            "root:.",
+            "root:file1.txt",
         ])
         .status()
         .unwrap();
@@ -6556,4 +6556,69 @@ fn reported_globs_filter_paths_directories_and_types() {
         );
         assert_eq!(out.stdout, expected.as_bytes(), "{args:?}");
     }
+}
+
+#[test]
+fn reported_action_plans_reject_collisions_and_impossible_destinations() {
+    let tmp = tempdir().unwrap();
+    for dir in ["one", "two", "dest"] {
+        fs::create_dir(tmp.path().join(dir)).unwrap();
+    }
+    fs::write(tmp.path().join("one/mod.rs"), b"one").unwrap();
+    fs::write(tmp.path().join("two/mod.rs"), b"two").unwrap();
+    fs::write(tmp.path().join("target.txt"), b"target").unwrap();
+    for force in [false, true] {
+        for action in ["--copy", "--move"] {
+            for (roots, destination, diagnostic) in [
+                (vec!["root:one", "root:two"], "dest", "Multiple sources"),
+                (vec!["root:one"], "target.txt", "not a directory"),
+                (vec!["root:one"], "target.txt/subdir", "not a directory"),
+                (vec!["root:one/mod.rs"], "one", "same"),
+            ] {
+                let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_grx"));
+                command
+                    .current_dir(tmp.path())
+                    .args([
+                        "--color=never",
+                        "kind:file",
+                        "=mod.rs",
+                        "--dry-run",
+                        action,
+                        destination,
+                    ])
+                    .args(&roots);
+                if force {
+                    command.arg("--force");
+                }
+                let out = command.output().unwrap();
+                assert_eq!(
+                    out.status.code(),
+                    Some(2),
+                    "{action} {destination}: {:?}",
+                    out.stdout
+                );
+                assert!(
+                    String::from_utf8_lossy(&out.stderr).contains(diagnostic),
+                    "{action} {destination}: {:?}",
+                    out.stderr
+                );
+            }
+        }
+    }
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
+        .current_dir(tmp.path())
+        .args([
+            "kind:file",
+            "=mod.rs",
+            "root:one",
+            "rename:mod.rs/",
+            "--dry-run",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Invalid rename destination"));
+    assert_eq!(fs::read(tmp.path().join("one/mod.rs")).unwrap(), b"one");
+    assert_eq!(fs::read(tmp.path().join("two/mod.rs")).unwrap(), b"two");
+    assert_eq!(fs::read_dir(tmp.path().join("dest")).unwrap().count(), 0);
 }
