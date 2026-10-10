@@ -6721,3 +6721,35 @@ fn reported_explicit_regex_overrides_configured_fixed_strings() {
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(out.stdout, b"abc\n[a-z]+\n");
 }
+
+#[test]
+fn reported_long_boolean_expressions_return_errors() {
+    for args in [
+        std::iter::repeat_n("NOT", 4000)
+            .chain(["alpha"])
+            .collect::<Vec<_>>(),
+        std::iter::repeat_n(["alpha", "OR"], 10000)
+            .flatten()
+            .chain(["beta"])
+            .collect(),
+        vec!["("; 4000]
+            .into_iter()
+            .chain(["alpha"])
+            .chain(vec![")"; 4000])
+            .collect(),
+    ] {
+        let out = reported_stdin(&args, b"alpha\nbeta\n");
+        assert_eq!(out.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("complexity"));
+    }
+    let args = std::iter::repeat_n("NOT", 64)
+        .chain(["alpha"])
+        .collect::<Vec<_>>();
+    let out = reported_stdin(&args, b"alpha\nbeta\n");
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(out.stdout, b"alpha\n");
+    let patterns = ["-e", "alpha"].repeat(4000);
+    let out = reported_stdin(&patterns, b"alpha\n");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("complexity"));
+}

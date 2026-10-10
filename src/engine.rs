@@ -2108,6 +2108,9 @@ impl Engine {
     }
 
     fn build_expr_from_patterns(&self, patterns: &[String]) -> Result<Option<QueryExpr>, String> {
+        if patterns.len() > 128 {
+            return Err("Expression complexity exceeds the supported limit".into());
+        }
         let mut expression = None;
         for pattern in patterns {
             let pattern = DslParser::parse_search_pattern_with_compiler(pattern, &|term, _| {
@@ -2123,6 +2126,9 @@ impl Engine {
     }
 
     fn build_dsl_query(&self) -> Result<Query, String> {
+        if self.cli.file_type.len() + self.cli.file_type_not.len() + self.cli.glob.len() > 128 {
+            return Err("Expression complexity exceeds the supported limit".into());
+        }
         let has_explicit_pattern_flag = !self.cli.regexp.is_empty() || !self.cli.file.is_empty();
         let flag_patterns = self.collect_patterns()?;
         let empty_pattern_set = has_explicit_pattern_flag && flag_patterns.is_empty();

@@ -66,6 +66,9 @@ impl DslParser {
                     if current.is_empty() {
                         return Err(format!("Empty filter alternative in '{argument}'"));
                     }
+                    if values.len() >= 128 {
+                        return Err("Expression complexity exceeds the supported limit".into());
+                    }
                     values.push(std::mem::take(&mut current));
                 }
                 _ => current.push(ch),
@@ -375,6 +378,9 @@ impl DslParser {
             raw_tokens.push((tok, s.to_string()));
         }
 
+        if raw_tokens.len() > 256 {
+            return Err("Expression complexity exceeds the supported limit".into());
+        }
         let mut expressions = Vec::new();
         let base_has_type = query.has_type_predicates();
         if let Some(expr) = query.selector_expr.take() {
@@ -1241,6 +1247,9 @@ impl DslParser {
                 expr = BoolExpr::Or(Box::new(expr), Box::new(parse_and(tokens, index)?));
             }
             Ok(expr)
+        }
+        if tokens.len() > 256 {
+            return Err("Expression complexity exceeds the supported limit".into());
         }
         if tokens.is_empty() {
             return Ok(None);
