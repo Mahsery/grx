@@ -190,6 +190,8 @@ pub struct MatchRecord<'a> {
     pub line_byte_offset: usize,
 
     pub line_bytes: &'a [u8],
+    pub source_line_bytes: &'a [u8],
+    pub bytes_searched: Option<usize>,
 
     pub match_spans: Vec<(usize, usize)>,
 
@@ -213,6 +215,8 @@ impl<'a> MatchRecord<'a> {
             line_number,
             line_byte_offset,
             line_bytes,
+            source_line_bytes: line_bytes,
+            bytes_searched: None,
             occurrence_count: match_spans.len().max(1),
             match_spans,
             near_spans: Vec::new(),
@@ -231,6 +235,8 @@ impl<'a> MatchRecord<'a> {
             line_number,
             line_byte_offset,
             line_bytes,
+            source_line_bytes: line_bytes,
+            bytes_searched: None,
             match_spans: Vec::new(),
             occurrence_count: 0,
             near_spans: Vec::new(),
@@ -244,6 +250,8 @@ impl<'a> MatchRecord<'a> {
             line_number: self.line_number,
             line_byte_offset: self.line_byte_offset,
             line_bytes: self.line_bytes.to_vec(),
+            source_line_bytes: self.source_line_bytes.to_vec(),
+            bytes_searched: self.bytes_searched,
             match_spans: self.match_spans.clone(),
             occurrence_count: self.occurrence_count,
             near_spans: self.near_spans.clone(),
@@ -258,6 +266,8 @@ pub struct OwnedMatchRecord {
     pub line_number: usize,
     pub line_byte_offset: usize,
     pub line_bytes: Vec<u8>,
+    pub source_line_bytes: Vec<u8>,
+    pub bytes_searched: Option<usize>,
     pub match_spans: Vec<(usize, usize)>,
 
     pub occurrence_count: usize,

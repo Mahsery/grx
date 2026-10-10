@@ -312,14 +312,13 @@ impl OutputFormatter {
             let mut match_count = 0;
             let mut matched_lines = 0;
             for m in matches {
-                let line_str = String::from_utf8_lossy(m.line_bytes);
-                let esc_line = escape_json(&line_str);
+                let line_json = json_bytes(m.source_line_bytes);
                 let abs_offset = m.line_byte_offset;
 
                 if m.is_context {
                     writeln!(
                         buffer,
-                        "{{\"data\":{{\"absolute_offset\":{abs_offset},\"line_number\":{},\"lines\":{{\"text\":\"{esc_line}\\n\"}},\"path\":{path_json},\"submatches\":[]}},\"type\":\"context\"}}",
+                        "{{\"data\":{{\"absolute_offset\":{abs_offset},\"line_number\":{},\"lines\":{line_json},\"path\":{path_json},\"submatches\":[]}},\"type\":\"context\"}}",
                         m.line_number
                     )?;
                 } else {
@@ -332,17 +331,16 @@ impl OutputFormatter {
                             && *end <= m.line_bytes.len()
                             && *start < *end
                         {
-                            let match_text = String::from_utf8_lossy(&m.line_bytes[*start..*end]);
-                            let esc_match = escape_json(&match_text);
+                            let match_json = json_bytes(&m.line_bytes[*start..*end]);
                             submatches.push(format!(
-                                "{{\"end\":{end},\"match\":{{\"text\":\"{esc_match}\"}},\"start\":{start}}}"
+                                "{{\"end\":{end},\"match\":{match_json},\"start\":{start}}}"
                             ));
                         }
                     }
 
                     writeln!(
                         buffer,
-                        "{{\"data\":{{\"absolute_offset\":{abs_offset},\"line_number\":{},\"lines\":{{\"text\":\"{esc_line}\\n\"}},\"path\":{path_json},\"submatches\":[{}]}},\"type\":\"match\"}}",
+                        "{{\"data\":{{\"absolute_offset\":{abs_offset},\"line_number\":{},\"lines\":{line_json},\"path\":{path_json},\"submatches\":[{}]}},\"type\":\"match\"}}",
                         m.line_number,
                         submatches.join(",")
                     )?;
@@ -350,13 +348,19 @@ impl OutputFormatter {
             }
 
             let file_elapsed = file_start.elapsed();
-            let bytes_searched = std::fs::metadata(path)
-                .map(|m| m.len())
-                .unwrap_or_else(|_| {
-                    matches
-                        .last()
-                        .map(|m| (m.line_byte_offset + m.line_bytes.len()) as u64)
-                        .unwrap_or(0)
+            let bytes_searched = matches
+                .first()
+                .and_then(|record| record.bytes_searched)
+                .map(|size| size as u64)
+                .unwrap_or_else(|| {
+                    std::fs::metadata(path)
+                        .map(|m| m.len())
+                        .unwrap_or_else(|_| {
+                            matches
+                                .last()
+                                .map(|m| (m.line_byte_offset + m.line_bytes.len()) as u64)
+                                .unwrap_or(0)
+                        })
                 });
             let bytes_printed = buffer.len();
             let human = format!("{:.6}s", file_elapsed.as_secs_f64());
@@ -874,5 +878,12 @@ impl OutputFormatter {
         matches: &[MatchRecord<'_>],
     ) -> io::Result<()> {
         self.print_file_matches_with_column(path, matches, None)
+    }
+}
+
+fn json_bytes(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => format!("{{\"text\":\"{}\"}}", escape_json(text)),
+        Err(_) => format!("{{\"bytes\":\"{}\"}}", base64_encode(bytes)),
     }
 }

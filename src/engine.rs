@@ -1494,6 +1494,8 @@ impl Engine {
                             line_number: r.line_number,
                             line_byte_offset: r.line_byte_offset,
                             line_bytes: &r.line_bytes,
+                            source_line_bytes: &r.source_line_bytes,
+                            bytes_searched: r.bytes_searched,
                             match_spans: r.match_spans.clone(),
                             occurrence_count: r.occurrence_count,
                             context_origins: r.context_origins.clone(),

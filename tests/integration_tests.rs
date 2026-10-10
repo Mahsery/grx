@@ -6828,3 +6828,72 @@ fn reported_max_columns_counts_characters() {
         assert_eq!(full.stdout, input.as_bytes());
     }
 }
+
+#[test]
+fn reported_json_preserves_source_bytes_terminators_offsets_and_size() {
+    for input in [
+        b"needle".as_slice(),
+        b"needle\r\nneedle\r\n",
+        b"one\nneedle\nthree\n",
+    ] {
+        let out = reported_stdin(&["--json", "needle", "ctx:1"], input);
+        assert_eq!(out.status.code(), Some(0));
+        let records: Vec<serde_json::Value> = out
+            .stdout
+            .split(|&byte| byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice(line).unwrap())
+            .collect();
+        let mut emitted = Vec::new();
+        for record in &records {
+            let data = &record["data"];
+            match record["type"].as_str().unwrap() {
+                "match" | "context" => {
+                    let payload = data["lines"]["text"].as_str().unwrap().as_bytes();
+                    let offset = data["absolute_offset"].as_u64().unwrap() as usize;
+                    assert_eq!(payload, &input[offset..offset + payload.len()]);
+                    emitted.extend_from_slice(payload);
+                    for submatch in data["submatches"].as_array().unwrap() {
+                        let start = submatch["start"].as_u64().unwrap() as usize;
+                        let end = submatch["end"].as_u64().unwrap() as usize;
+                        assert_eq!(&payload[start..end], b"needle");
+                        assert_eq!(submatch["match"]["text"], "needle");
+                    }
+                }
+                "end" => assert_eq!(data["stats"]["bytes_searched"], input.len()),
+                "summary" => assert_eq!(data["stats"]["bytes_searched"], input.len()),
+                _ => {}
+            }
+        }
+        assert_eq!(emitted, input);
+    }
+    let out = reported_stdin(&["--json", "-a", "needle"], b"\xffneedle\n");
+    assert_eq!(out.status.code(), Some(0));
+    let record: serde_json::Value = out
+        .stdout
+        .split(|&byte| byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice::<serde_json::Value>(line).unwrap())
+        .find(|record| record["type"] == "match")
+        .unwrap();
+    assert_eq!(
+        record["data"]["lines"],
+        serde_json::json!({"bytes":"/25lZWRsZQo="})
+    );
+    assert_eq!(
+        record["data"]["submatches"],
+        serde_json::json!([{"start":1,"end":7,"match":{"text":"needle"}}])
+    );
+    let out = reported_stdin(&["--json", "-a", "hex:ff"], b"\xffneedle\n");
+    let record = out
+        .stdout
+        .split(|&byte| byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| serde_json::from_slice::<serde_json::Value>(line).unwrap())
+        .find(|record| record["type"] == "match")
+        .unwrap();
+    assert_eq!(
+        record["data"]["submatches"],
+        serde_json::json!([{"start":0,"end":1,"match":{"bytes":"/w=="}}])
+    );
+}

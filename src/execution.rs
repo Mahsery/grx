@@ -242,6 +242,18 @@ impl<'m> BufferSearch<'m> {
                 self.options.after_context,
             );
         }
+        for record in &mut records {
+            let start = record.line_byte_offset;
+            let mut end = start + record.line_bytes.len();
+            if bytes.get(end) == Some(&b'\r') {
+                end += 1;
+            }
+            if bytes.get(end) == Some(&b'\n') {
+                end += 1;
+            }
+            record.source_line_bytes = &bytes[start..end];
+            record.bytes_searched = Some(bytes.len());
+        }
         Ok(Some(SearchResult {
             records,
             matched_lines,
