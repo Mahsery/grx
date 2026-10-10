@@ -29,11 +29,13 @@ pub fn process_directory_portable(
     let notifier = ctx.notifier;
     let on_entry = ctx.on_entry;
 
-    if let Ok(read_dir) = fs::read_dir(dir) {
+    {
+        let read_dir = fs::read_dir(dir)?;
         let dir_filter = parent_filter
             .for_dir(dir)
             .unwrap_or_else(|| Arc::clone(parent_filter));
-        for fs_entry in read_dir.flatten() {
+        for fs_entry in read_dir {
+            let fs_entry = fs_entry?;
             let file_type = match fs_entry.file_type() {
                 Ok(ft) => ft,
                 Err(_) => continue,

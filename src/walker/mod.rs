@@ -814,7 +814,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn test_parallel_walker_skips_unreadable_directory() {
+    fn test_parallel_walker_reports_unreadable_directory() {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempdir().unwrap();
         let root = tmp.path();
@@ -845,15 +845,11 @@ mod tests {
             },
         );
 
-        let _ = fs::set_permissions(&unreadable_dir, fs::Permissions::from_mode(0o755));
-
-        assert!(
-            walk_res.is_ok(),
-            "Walker must not abort on unreadable directory"
-        );
+        let access_denied = fs::read_dir(&unreadable_dir).is_err();
+        fs::set_permissions(&unreadable_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(walk_res.is_err(), access_denied);
         let list = found.lock().unwrap().clone();
-        assert!(list.contains(&"found.txt".to_string()));
-        assert!(!list.contains(&"secret.txt".to_string()));
+        assert_eq!(list.contains(&"secret.txt".to_string()), !access_denied);
     }
 
     #[test]

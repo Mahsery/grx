@@ -2969,7 +2969,7 @@ walker-buffer-size-bytes = 32768
 
 #[test]
 #[cfg(unix)]
-fn test_traversal_skips_unreadable_subdirectories_without_aborting() {
+fn test_traversal_reports_unreadable_subdirectories() {
     use std::os::unix::fs::PermissionsExt;
     let grx_bin = env!("CARGO_BIN_EXE_grx");
     let tmp = tempfile::tempdir().unwrap();
@@ -2996,17 +2996,21 @@ fn test_traversal_skips_unreadable_subdirectories_without_aborting() {
         .output()
         .expect("Failed to execute grx binary");
 
+    let access_denied = fs::read_dir(&unreadable_dir).is_err();
     let mut restore_perms = fs::metadata(&unreadable_dir).unwrap().permissions();
     restore_perms.set_mode(0o755);
     let _ = fs::set_permissions(&unreadable_dir, restore_perms);
 
     assert_eq!(
         out.status.code(),
-        Some(0),
-        "Search should succeed despite unreadable sibling dir"
+        Some(if access_denied { 2 } else { 0 }),
+        "Search must report incomplete traversal"
     );
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("content_token_here"));
+    if access_denied {
+        assert!(!out.stderr.is_empty());
+    } else {
+        assert!(String::from_utf8_lossy(&out.stdout).contains("content_token_here"));
+    }
 }
 
 #[test]
@@ -6435,4 +6439,66 @@ fn path_filter_escapes_preserve_colons_backslashes_and_directory_boundaries() {
             "keep/file.txt"
         ]
     );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn reported_small_walker_buffers_preserve_inventory() {
+    let tmp = tempdir().unwrap();
+    fs::create_dir(tmp.path().join("files")).unwrap();
+    for name in [
+        "a.rs",
+        "long_filename_that_needs_a_larger_dirent.toml",
+        "z.txt",
+    ] {
+        fs::write(tmp.path().join("files").join(name), b"needle\n").unwrap();
+    }
+    for size in [1, 32, 64, 65536] {
+        fs::write(
+            tmp.path().join("config.toml"),
+            format!("[search]\nwalker-buffer-size-bytes = {size}\n"),
+        )
+        .unwrap();
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
+            .current_dir(tmp.path())
+            .args([
+                "--config",
+                "config.toml",
+                "--color=never",
+                "kind:file",
+                "root:files",
+                "sort:path",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "{size}: {:?}", out.stderr);
+        assert_eq!(
+            out.stdout,
+            b"files/a.rs\nfiles/long_filename_that_needs_a_larger_dirent.toml\nfiles/z.txt\n"
+        );
+        assert!(out.stderr.is_empty());
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn reported_procfs_reads_ignore_mmap_threshold() {
+    let expected = fs::read("/proc/version").unwrap();
+    for threshold in ["0", "1", "65536"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
+            .args([
+                "--color=never",
+                "--no-heading",
+                "-N",
+                "--no-filename",
+                "lit:Linux",
+                "root:/proc/version",
+                "--mmap-threshold",
+                threshold,
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "{threshold}: {:?}", out.stderr);
+        assert_eq!(out.stdout, expected);
+    }
 }

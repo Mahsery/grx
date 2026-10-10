@@ -60,7 +60,16 @@ impl ContentReader for AdaptiveReader {
         }
 
         if len == 0 {
-            return Ok(BufferRef::Borrowed(&[]));
+            scratch.clear();
+            file.rewind()?;
+            file.read_to_end(scratch)?;
+            if self
+                .max_file_size
+                .is_some_and(|max| scratch.len() as u64 > max)
+            {
+                return Ok(BufferRef::Borrowed(&[]));
+            }
+            return Ok(BufferRef::Borrowed(scratch));
         }
 
         match unsafe { Mmap::map(&file) } {

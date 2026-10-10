@@ -53,7 +53,7 @@ pub fn process_directory_getdents(
     });
 
     if fd < 0 {
-        return Ok(());
+        return Err(std::io::Error::last_os_error().into());
     }
 
     struct FdGuard(libc::c_int);
@@ -83,7 +83,6 @@ pub fn process_directory_getdents(
         if buffer_size > 0 && buffer.len() != buffer_size {
             buffer.resize(buffer_size, 0);
         }
-        let buf_size = buffer.len();
 
         loop {
             let nread = unsafe {
@@ -91,7 +90,7 @@ pub fn process_directory_getdents(
                     libc::SYS_getdents64,
                     fd,
                     buffer.as_mut_ptr() as *mut libc::c_void,
-                    buf_size,
+                    buffer.len(),
                 )
             };
 
@@ -101,7 +100,12 @@ pub fn process_directory_getdents(
                     continue;
                 }
 
-                return Ok(());
+                if err.raw_os_error() == Some(libc::EINVAL) && buffer.len() < 64 * 1024 {
+                    let next_size = buffer.len().saturating_mul(2).max(512);
+                    buffer.resize(next_size, 0);
+                    continue;
+                }
+                return Err(err.into());
             }
             if nread == 0 {
                 break;
