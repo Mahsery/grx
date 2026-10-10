@@ -6622,3 +6622,102 @@ fn reported_action_plans_reject_collisions_and_impossible_destinations() {
     assert_eq!(fs::read(tmp.path().join("two/mod.rs")).unwrap(), b"two");
     assert_eq!(fs::read_dir(tmp.path().join("dest")).unwrap().count(), 0);
 }
+
+fn reported_stdin(args: &[&str], input: &[u8]) -> std::process::Output {
+    use std::io::Write;
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
+        .args(["--color=never", "--no-heading", "-I", "-N"])
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(input).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn reported_word_case_and_line_semantics() {
+    for (args, input, expected) in [
+        (vec!["-w", "lit:."], ".\na.a\n . \n", ".\n . \n"),
+        (vec!["-w", "lit:C++"], "C++\n C++ \nxC++y\n", "C++\n C++ \n"),
+        (vec!["-i", "lit:k"], "k\nK\n", "k\nK\n"),
+        (vec!["-i", "lit:K"], "k\nK\n", "k\nK\n"),
+        (vec!["-i", "lit:s"], "s\nſ\n", "s\nſ\n"),
+        (vec!["-i", "lit:ſ"], "s\nſ\n", "s\nſ\n"),
+        (vec!["-i", "lit:K", "AND", "lit:"], "k\nK\n", "k\nK\n"),
+        (
+            vec!["-S", "re:^needle"],
+            "NEEDLE\nneedle\n",
+            "NEEDLE\nneedle\n",
+        ),
+        (
+            vec!["-S", "-E", "^needle"],
+            "NEEDLE\nneedle\n",
+            "NEEDLE\nneedle\n",
+        ),
+        (vec!["-S", "re:^Needle"], "Needle\nneedle\n", "Needle\n"),
+        (
+            vec!["-i", "needle", "near:1,UPPER"],
+            "needle\nupper\n",
+            "needle\nupper\n",
+        ),
+        (vec!["-s", "needle", "near:1,upper"], "needle\nUPPER\n", ""),
+        (
+            vec!["-i", "needle", "no-near:1,UPPER"],
+            "needle\nupper\n",
+            "",
+        ),
+    ] {
+        let out = reported_stdin(&args, input.as_bytes());
+        assert_eq!(
+            out.status.code(),
+            Some(if expected.is_empty() { 1 } else { 0 }),
+            "{args:?}: {:?}",
+            out.stderr
+        );
+        assert_eq!(out.stdout, expected.as_bytes(), "{args:?}");
+    }
+    for args in [
+        vec!["-w", "fz:needle"],
+        vec!["-x", "fz:needle"],
+        vec!["-w", "hex:62"],
+        vec!["lit:alpha\nbeta"],
+        vec!["lit:alpha\nbeta", "AND", "lit:"],
+        vec!["lit:alpha\r"],
+        vec!["lit:alpha\r", "AND", "lit:"],
+    ] {
+        let out = reported_stdin(&args, b"alpha\r\nbeta\nxneedley\n");
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {:?}", out.stdout);
+        assert!(!out.stderr.is_empty());
+    }
+}
+
+#[test]
+fn reported_explicit_regex_overrides_configured_fixed_strings() {
+    let tmp = tempdir().unwrap();
+    fs::write(
+        tmp.path().join("config.toml"),
+        b"[search]\nfixed-strings = true\n",
+    )
+    .unwrap();
+    fs::write(tmp.path().join("input.txt"), b"abc\n[a-z]+\n").unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
+        .current_dir(tmp.path())
+        .args([
+            "--config",
+            "config.toml",
+            "--color=never",
+            "--no-heading",
+            "-I",
+            "-N",
+            "-E",
+            "[a-z]+",
+            "root:input.txt",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(out.stdout, b"abc\n[a-z]+\n");
+}

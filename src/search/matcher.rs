@@ -72,8 +72,7 @@ impl SimdLiteralMatcher {
             None
         };
 
-        let case_insensitive_regex = if !case_sensitive && !needle.is_empty() && !needle.is_ascii()
-        {
+        let case_insensitive_regex = if !case_sensitive && !needle.is_empty() {
             Regex::new(&format!("(?i){}", regex::escape(needle_str))).ok()
         } else {
             None
@@ -154,7 +153,7 @@ impl Matcher for SimdLiteralMatcher {
                 .map_err(io::Error::other)?
                 .find_matches(buffer, sink);
         }
-        if buffer.len() < self.needle.len() {
+        if self.case_insensitive_regex.is_none() && buffer.len() < self.needle.len() {
             return Ok(0);
         }
 

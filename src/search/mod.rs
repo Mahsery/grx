@@ -436,10 +436,8 @@ mod tests {
     }
 
     #[test]
-    fn ascii_case_insensitive_literals_use_simd_candidate_search() {
+    fn ascii_case_insensitive_literals_preserve_spans() {
         let matcher = SimdLiteralMatcher::new("Needle", false);
-        assert!(matcher.case_insensitive_regex.is_none());
-        assert!(matcher.finder.is_none());
 
         let mut sink = VecMatchSink::default();
         matcher

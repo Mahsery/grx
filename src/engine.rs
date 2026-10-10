@@ -2089,7 +2089,8 @@ impl Engine {
     }
 
     fn pattern_syntax(&self) -> PatternSyntax {
-        if self.cli.fixed_strings || self.config.search.fixed_strings {
+        if self.cli.fixed_strings || (self.config.search.fixed_strings && !self.cli.extended_regexp)
+        {
             PatternSyntax::Fixed
         } else if self.cli.extended_regexp {
             PatternSyntax::Regex
@@ -2275,6 +2276,27 @@ impl Engine {
             *target = crate::config::Config::expand_tilde(&*target);
         }
 
+        for expr in [&query.expr, &query.name_expr].into_iter().flatten() {
+            if expr.any(&|pattern| match pattern {
+                SearchPattern::Literal { text, .. }
+                | SearchPattern::ExactLiteral(text)
+                | SearchPattern::ExactMatch { text, .. }
+                | SearchPattern::Fuzzy { text, .. } => text.contains(['\n', '\r']),
+                _ => false,
+            }) {
+                return Err("Line separators are unsupported in literal patterns".into());
+            }
+            if (self.cli.word_regexp || self.cli.line_regexp)
+                && expr.any(&|pattern| {
+                    matches!(pattern, SearchPattern::Fuzzy { .. } | SearchPattern::Hex(_))
+                })
+            {
+                return Err(
+                    "Word and line constraints are unsupported for fuzzy and hex patterns".into(),
+                );
+            }
+        }
+
         for expr in [&mut query.expr, &mut query.name_expr]
             .into_iter()
             .flatten()
@@ -2377,7 +2399,7 @@ impl Engine {
             return Ok(Box::new(
                 BooleanEngine::try_new(expr.clone())
                     .map_err(|err| format!("Invalid regex: {err}"))?
-                    .with_proximity_filters(&query.proximity_filters),
+                    .with_proximity_filters_case(&query.proximity_filters, query.case_sensitive),
             ));
         }
 
@@ -2456,6 +2478,10 @@ impl Engine {
             ) => {
                 *case_sensitive = None;
             }
+            QueryExpr::Pattern(SearchPattern::Regex(pattern)) => {
+                let sensitive = pattern.chars().any(char::is_uppercase);
+                Self::set_case_sensitive(expr, sensitive);
+            }
             QueryExpr::And(a, b) | QueryExpr::Or(a, b) => {
                 Self::set_smart_case(a);
                 Self::set_smart_case(b);
@@ -2491,7 +2517,7 @@ impl Engine {
                     );
                 }
                 if self.cli.word_regexp {
-                    body = format!(r"\b(?:{body})\b");
+                    body = format!(r"\b{{start-half}}(?:{body})\b{{end-half}}");
                 }
                 if self.cli.line_regexp {
                     body = format!(r"^(?:{body})$");
@@ -2747,7 +2773,7 @@ mod tests {
         );
         assert_eq!(
             engine.build_dsl_query().unwrap().expr,
-            Some(QueryExpr::Pattern(SearchPattern::Regex("a..b".into())))
+            Some(QueryExpr::Pattern(SearchPattern::Regex("(?i)a..b".into())))
         );
     }
 
@@ -3453,7 +3479,19 @@ mod tests {
             let engine = Engine::new(Config::default(), cli);
             let query = engine.build_dsl_query().unwrap();
             let from_in = DslParser::parse([format!("in:{pattern}")]).unwrap();
-            assert_eq!(query.expr, from_in.expr);
+            let in_matcher = engine.build_matcher(&from_in).unwrap();
+            let in_search = BufferSearch {
+                matcher: in_matcher.as_ref(),
+                options: SearchOptions::default(),
+            };
+            assert_eq!(
+                in_search.search(accepted).unwrap().unwrap().matched_lines,
+                1
+            );
+            assert_eq!(
+                in_search.search(rejected).unwrap().unwrap().matched_lines,
+                0
+            );
             let matcher = engine.build_matcher(&query).unwrap();
             let search = BufferSearch {
                 matcher: matcher.as_ref(),

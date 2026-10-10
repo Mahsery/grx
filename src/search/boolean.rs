@@ -228,11 +228,22 @@ impl BooleanEngine {
         })
     }
 
-    pub fn with_proximity_filters(mut self, filters: &[crate::dsl::ProximityFilter]) -> Self {
+    pub fn with_proximity_filters(self, filters: &[crate::dsl::ProximityFilter]) -> Self {
+        self.with_proximity_filters_case(filters, None)
+    }
+
+    pub fn with_proximity_filters_case(
+        mut self,
+        filters: &[crate::dsl::ProximityFilter],
+        case: Option<bool>,
+    ) -> Self {
         self.proximity_filters = filters
             .iter()
             .map(|f| {
-                let matcher = SimdLiteralMatcher::with_smart_case(&f.term, true);
+                let matcher = SimdLiteralMatcher::new(
+                    &f.term,
+                    case.unwrap_or_else(|| f.term.chars().any(char::is_uppercase)),
+                );
                 CompiledProximityFilter {
                     matcher,
                     window: f.window,
@@ -246,7 +257,7 @@ impl BooleanEngine {
 
 #[inline]
 pub(crate) fn find_substr_on_line(matcher: &SimdLiteralMatcher, line: &[u8]) -> Option<usize> {
-    if line.len() < matcher.needle.len() {
+    if matcher.case_insensitive_regex.is_none() && line.len() < matcher.needle.len() {
         return None;
     }
     if let Some(ref finder) = matcher.finder {
