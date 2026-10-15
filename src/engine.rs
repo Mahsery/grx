@@ -133,7 +133,7 @@ impl CompiledPathPredicate {
             let trimmed = raw.trim_end_matches('/');
             let raw = if trimmed.is_empty() { "/" } else { trimmed };
             let expanded = Config::expand_tilde(PathBuf::from(raw));
-            let anchored = expanded.is_absolute();
+            let anchored = expanded.is_absolute() || expanded.has_root();
             let expanded = if anchored {
                 lexical_absolute(&expanded, cwd)
             } else {
@@ -172,7 +172,7 @@ impl CompiledPathPredicate {
             } else {
                 roots.to_vec()
             };
-            let candidates = if operand.is_absolute() {
+            let candidates = if operand.is_absolute() || operand.has_root() {
                 vec![lexical_absolute(&operand, cwd)]
             } else {
                 roots
@@ -192,7 +192,7 @@ impl CompiledPathPredicate {
                 .into_iter()
                 .map(|path| {
                     QueryExpr::Pattern(SearchPattern::ExactMatch {
-                        text: path.to_string_lossy().into_owned(),
+                        text: String::from_utf8_lossy(&normalized_path_bytes(&path)).into_owned(),
                         case_sensitive: *case_sensitive,
                     })
                 })
@@ -204,9 +204,12 @@ impl CompiledPathPredicate {
                 matcher: Arc::new(matcher),
                 absolute: true,
             });
-        } else if raw.starts_with('/') || raw.starts_with("~/") {
+        } else if raw.starts_with('/') || raw.starts_with("~/") || Path::new(raw).is_absolute() {
             let expanded = Config::expand_tilde(PathBuf::from(raw));
-            pattern = DslParser::parse_search_pattern(&format!("^{}", expanded.display()))?;
+            let abs = lexical_absolute(&expanded, cwd);
+            let norm_bytes = normalized_path_bytes(&abs);
+            let norm = String::from_utf8_lossy(&norm_bytes);
+            pattern = DslParser::parse_search_pattern(&format!("^{norm}"))?;
             true
         } else {
             false
@@ -285,6 +288,51 @@ fn excluded_directory_alternatives(
             paths.push(path.clone());
         }
         _ => {}
+    }
+}
+
+fn expr_mentions_positive_name(
+    expr: &QueryExpr,
+    clean: &str,
+    case_sensitive: Option<bool>,
+) -> bool {
+    match expr {
+        QueryExpr::Pattern(pat) => {
+            let text = match pat {
+                SearchPattern::Literal { text, .. }
+                | SearchPattern::ExactLiteral(text)
+                | SearchPattern::ExactMatch { text, .. } => {
+                    text.trim_end_matches('/').trim_end_matches('\\')
+                }
+                _ => return false,
+            };
+            let sensitive = case_sensitive.unwrap_or_else(|| pat.is_case_sensitive());
+            if sensitive {
+                text == clean
+            } else {
+                text.eq_ignore_ascii_case(clean)
+            }
+        }
+        QueryExpr::Not(_) => false,
+        QueryExpr::And(a, b) | QueryExpr::Or(a, b) => {
+            expr_mentions_positive_name(a, clean, case_sensitive)
+                || expr_mentions_positive_name(b, clean, case_sensitive)
+        }
+    }
+}
+
+fn selector_mentions_positive_path(expr: &SelectorExpr, clean: &str) -> bool {
+    match expr {
+        BoolExpr::Pattern(crate::dsl::EntryPredicate::Path(p)) => {
+            let trimmed = p.trim_end_matches('/').trim_end_matches('\\');
+            trimmed == clean
+                || trimmed.ends_with(&format!("/{clean}"))
+                || trimmed.ends_with(&format!("\\{clean}"))
+        }
+        BoolExpr::Pattern(_) | BoolExpr::Not(_) => false,
+        BoolExpr::And(a, b) | BoolExpr::Or(a, b) => {
+            selector_mentions_positive_path(a, clean) || selector_mentions_positive_path(b, clean)
+        }
     }
 }
 
@@ -1133,7 +1181,11 @@ impl Engine {
         for root in &roots {
             if let Err(error) = root.symlink_metadata() {
                 if !no_messages {
-                    eprintln!("{}: {error}", root.display());
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        eprintln!("{}: No such file or directory (os error 2)", root.display());
+                    } else {
+                        eprintln!("{}: {error}", root.display());
+                    }
                 }
                 had_error.store(true, Ordering::Relaxed);
             }
@@ -2384,8 +2436,30 @@ impl Engine {
             .search_hidden
             .unwrap_or(self.cli.hidden || self.config.search.hidden || self.cli.unrestricted >= 2);
 
+        let mut default_excludes = self.config.default_excludes.clone();
+        if query.name_expr.is_some() || !query.targets.is_empty() || query.selector_expr.is_some() {
+            default_excludes.retain(|excl| {
+                let clean = excl.trim_end_matches('/').trim_end_matches('\\');
+                let matches_name = query.name_expr.as_ref().is_some_and(|expr| {
+                    expr_mentions_positive_name(expr, clean, query.case_sensitive)
+                });
+                let matches_target = query.targets.iter().any(|t| {
+                    let s = t.to_string_lossy();
+                    let trimmed = s.trim_end_matches('/').trim_end_matches('\\');
+                    trimmed == clean
+                        || trimmed.ends_with(&format!("/{clean}"))
+                        || trimmed.ends_with(&format!("\\{clean}"))
+                });
+                let matches_selector = query
+                    .selector_expr
+                    .as_ref()
+                    .is_some_and(|sel| selector_mentions_positive_path(sel, clean));
+                !matches_name && !matches_target && !matches_selector
+            });
+        }
+
         let mut engine = GitignoreEngine::new(
-            self.config.default_excludes.clone(),
+            default_excludes,
             Vec::new(),
             Vec::new(),
             respect_ignore,
