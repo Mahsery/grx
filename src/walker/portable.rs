@@ -19,11 +19,13 @@ pub fn process_directory_portable(
     let WalkConfig {
         max_depth,
         follow_symlinks,
+        regular_files_only,
         emit_dirs,
         emit_links,
         emit_files,
-        ..
+        buffer_size,
     } = ctx.config;
+    let _ = buffer_size;
     let visited_dirs = ctx.visited_dirs;
     let active_tasks = ctx.active_tasks;
     let notifier = ctx.notifier;
@@ -43,7 +45,8 @@ pub fn process_directory_portable(
             let is_dir = file_type.is_dir();
             let is_symlink = file_type.is_symlink();
             let is_file = file_type.is_file();
-            if !is_dir && !is_symlink && !is_file {
+            if (regular_files_only || emit_dirs || emit_links) && !is_dir && !is_symlink && !is_file
+            {
                 continue;
             }
             let name_bytes = fs_entry.file_name().as_encoded_bytes().to_vec();

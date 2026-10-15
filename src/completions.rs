@@ -100,7 +100,10 @@ pub fn resolve_completion_path(shell: &str) -> Result<PathBuf, io::Error> {
             } else {
                 fallback_home_config()?
             };
-            Ok(config_home.join("fish/completions/grx.fish"))
+            Ok(config_home
+                .join("fish")
+                .join("completions")
+                .join("grx.fish"))
         }
         "bash" => {
             let data_home = if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
@@ -112,25 +115,30 @@ pub fn resolve_completion_path(shell: &str) -> Result<PathBuf, io::Error> {
             } else {
                 fallback_home_data()?
             };
-            Ok(data_home.join("bash-completion/completions/grx"))
+            Ok(data_home
+                .join("bash-completion")
+                .join("completions")
+                .join("grx"))
         }
         "zsh" => {
             if let Ok(zdotdir) = std::env::var("ZDOTDIR")
                 && !zdotdir.trim().is_empty()
             {
-                return Ok(PathBuf::from(zdotdir.trim()).join(".zfunc/_grx"));
+                return Ok(PathBuf::from(zdotdir.trim()).join(".zfunc").join("_grx"));
             }
             if let Ok(home) = std::env::var("HOME")
                 && !home.trim().is_empty()
             {
-                return Ok(PathBuf::from(home.trim()).join(".zfunc/_grx"));
+                return Ok(PathBuf::from(home.trim()).join(".zfunc").join("_grx"));
             }
             #[cfg(windows)]
             {
                 if let Ok(userprofile) = std::env::var("USERPROFILE")
                     && !userprofile.trim().is_empty()
                 {
-                    return Ok(PathBuf::from(userprofile.trim()).join(".zfunc/_grx"));
+                    return Ok(PathBuf::from(userprofile.trim())
+                        .join(".zfunc")
+                        .join("_grx"));
                 }
             }
             Err(io::Error::new(
@@ -174,7 +182,7 @@ fn fallback_home_data() -> Result<PathBuf, io::Error> {
     if let Ok(home) = std::env::var("HOME")
         && !home.trim().is_empty()
     {
-        return Ok(PathBuf::from(home.trim()).join(".local/share"));
+        return Ok(PathBuf::from(home.trim()).join(".local").join("share"));
     }
     #[cfg(windows)]
     {
@@ -186,7 +194,9 @@ fn fallback_home_data() -> Result<PathBuf, io::Error> {
         if let Ok(userprofile) = std::env::var("USERPROFILE")
             && !userprofile.trim().is_empty()
         {
-            return Ok(PathBuf::from(userprofile.trim()).join(".local/share"));
+            return Ok(PathBuf::from(userprofile.trim())
+                .join(".local")
+                .join("share"));
         }
     }
     Err(io::Error::new(

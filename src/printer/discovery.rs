@@ -1,6 +1,8 @@
 use super::OutputFormatter;
 use super::json::escape_json;
-use super::theme::{base64_encode, get_fd_file_style};
+#[cfg(unix)]
+use super::theme::base64_encode;
+use super::theme::get_fd_file_style;
 use std::io::{self, Write};
 use std::path::Path;
 

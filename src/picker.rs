@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::collections::BTreeSet;
 use std::fmt::Display;
 #[cfg(unix)]

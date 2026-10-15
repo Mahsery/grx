@@ -222,12 +222,8 @@ fn is_subpath(parent: &Path, child: &Path) -> bool {
         let p_str = p.to_string_lossy().to_ascii_lowercase().replace('/', "\\");
         let c_str = c.to_string_lossy().to_ascii_lowercase().replace('/', "\\");
         let p_trimmed = p_str.trim_end_matches('\\');
-        if c_str == p_trimmed
+        c_str == p_trimmed
             || (c_str.starts_with(p_trimmed) && c_str[p_trimmed.len()..].starts_with('\\'))
-        {
-            return true;
-        }
-        false
     }
 }
 
