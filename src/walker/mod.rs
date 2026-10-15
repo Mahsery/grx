@@ -78,6 +78,7 @@ pub struct ParallelWalker {
     emit_dirs: bool,
     emit_links: bool,
     emit_files: Option<bool>,
+    suppress_errors: bool,
     pub buffer_size: usize,
 }
 
@@ -99,6 +100,7 @@ impl ParallelWalker {
             emit_dirs: false,
             emit_links: false,
             emit_files: None,
+            suppress_errors: false,
             buffer_size: 64 * 1024,
         }
     }
@@ -125,6 +127,11 @@ impl ParallelWalker {
 
     pub fn with_emit_files(mut self, emit_files: bool) -> Self {
         self.emit_files = Some(emit_files);
+        self
+    }
+
+    pub fn with_suppress_errors(mut self, suppress_errors: bool) -> Self {
+        self.suppress_errors = suppress_errors;
         self
     }
 }
@@ -302,6 +309,7 @@ impl DirectoryWalker for ParallelWalker {
             emit_files: self
                 .emit_files
                 .unwrap_or(!self.emit_dirs && !self.emit_links),
+            suppress_errors: self.suppress_errors,
             buffer_size: self.buffer_size,
         };
 
@@ -421,6 +429,7 @@ struct WalkConfig {
     emit_dirs: bool,
     emit_links: bool,
     emit_files: bool,
+    suppress_errors: bool,
     buffer_size: usize,
 }
 

@@ -983,6 +983,9 @@ impl Engine {
             || query.kind == Some(crate::dsl::EntryKind::Text)
             || !query.is_discovery()
             || (query.is_discovery() && query.kind.is_none());
+        let suppress_traversal_errors = (self.config.search.suppress_errors
+            || self.cli.no_messages)
+            && !self.cli.no_ignore_messages;
         let walker = ParallelWalker::new(
             self.cli.threads.unwrap_or(self.config.search.threads),
             max_depth,
@@ -994,6 +997,7 @@ impl Engine {
         .with_emit_dirs(is_dir_discovery)
         .with_emit_links(is_link_discovery)
         .with_emit_files(is_file_discovery)
+        .with_suppress_errors(suppress_traversal_errors)
         .with_regular_files_only(
             query.kind == Some(crate::dsl::EntryKind::File)
                 || query.kind == Some(crate::dsl::EntryKind::Bin)
@@ -1173,9 +1177,6 @@ impl Engine {
         } else {
             query.targets.clone()
         };
-        let suppress_traversal_errors = (self.config.search.suppress_errors
-            || self.cli.no_messages)
-            && !self.cli.no_ignore_messages;
         let no_messages = self.cli.no_messages;
         let had_error = AtomicBool::new(false);
         for root in &roots {
@@ -1766,7 +1767,19 @@ impl Engine {
                                 io::ErrorKind::PermissionDenied
                                     | io::ErrorKind::NotFound
                                     | io::ErrorKind::IsADirectory
-                            );
+                            ) || {
+                                #[cfg(windows)]
+                                {
+                                    matches!(
+                                        error.raw_os_error(),
+                                        Some(1 | 32 | 33 | 362 | 389 | 1920 | 1921)
+                                    )
+                                }
+                                #[cfg(not(windows))]
+                                {
+                                    false
+                                }
+                            };
                             if !suppress_traversal_errors || (!benign && !no_messages) {
                                 if !no_messages {
                                     eprintln!("{}: {error}", path.display());

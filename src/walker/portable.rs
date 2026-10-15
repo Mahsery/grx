@@ -23,6 +23,7 @@ pub fn process_directory_portable(
         emit_dirs,
         emit_links,
         emit_files,
+        suppress_errors,
         buffer_size,
     } = ctx.config;
     let _ = buffer_size;
@@ -32,12 +33,20 @@ pub fn process_directory_portable(
     let on_entry = ctx.on_entry;
 
     {
-        let read_dir = fs::read_dir(dir)?;
+        let read_dir = match fs::read_dir(dir) {
+            Ok(rd) => rd,
+            Err(_) if suppress_errors => return Ok(()),
+            Err(err) => return Err(err.into()),
+        };
         let dir_filter = parent_filter
             .for_dir(dir)
             .unwrap_or_else(|| Arc::clone(parent_filter));
         for fs_entry in read_dir {
-            let fs_entry = fs_entry?;
+            let fs_entry = match fs_entry {
+                Ok(entry) => entry,
+                Err(_) if suppress_errors => continue,
+                Err(err) => return Err(err.into()),
+            };
             let file_type = match fs_entry.file_type() {
                 Ok(ft) => ft,
                 Err(_) => continue,

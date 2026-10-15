@@ -32,6 +32,7 @@ pub fn process_directory_getdents(
         emit_dirs,
         emit_links,
         emit_files,
+        suppress_errors,
         buffer_size,
     } = ctx.config;
     let visited_dirs = ctx.visited_dirs;
@@ -53,6 +54,9 @@ pub fn process_directory_getdents(
     });
 
     if fd < 0 {
+        if suppress_errors {
+            return Ok(());
+        }
         return Err(std::io::Error::last_os_error().into());
     }
 
@@ -104,6 +108,9 @@ pub fn process_directory_getdents(
                     let next_size = buffer.len().saturating_mul(2).max(512);
                     buffer.resize(next_size, 0);
                     continue;
+                }
+                if suppress_errors {
+                    return Ok(());
                 }
                 return Err(err.into());
             }
