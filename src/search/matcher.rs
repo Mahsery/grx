@@ -7,21 +7,40 @@ use std::io;
 use super::{Lines, find_line_bounds};
 
 pub struct ExactMatcher {
-    text: String,
-    case_sensitive: bool,
+    pub(crate) text: String,
+    pub(crate) case_sensitive: bool,
+    pub(crate) is_ascii: bool,
+    pub(crate) finder: Option<Finder<'static>>,
 }
 
 impl ExactMatcher {
     pub fn new(text: &str, case_sensitive: bool) -> Self {
+        let is_ascii = text.is_ascii();
+        let finder = if case_sensitive && !text.is_empty() && !text.contains(['\n', '\r']) {
+            Some(Finder::new(text.as_bytes()).into_owned())
+        } else {
+            None
+        };
         Self {
             text: text.into(),
             case_sensitive,
+            is_ascii,
+            finder,
         }
     }
 
+    #[inline]
     pub fn is_match(&self, bytes: &[u8]) -> bool {
         if self.case_sensitive {
             return bytes == self.text.as_bytes();
+        }
+        if self.is_ascii {
+            if bytes.len() == self.text.len() && bytes.eq_ignore_ascii_case(self.text.as_bytes()) {
+                return true;
+            }
+            if bytes.len() <= self.text.len() || bytes.is_ascii() {
+                return false;
+            }
         }
         let Ok(text) = std::str::from_utf8(bytes) else {
             return false;

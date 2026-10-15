@@ -79,13 +79,57 @@ impl CompiledExpr {
                 m.matches_at(line) || find_substr_on_line(m, line).is_some()
             }
             CompiledExpr::Exact(m) => m.is_match(line),
-            CompiledExpr::Fuzzy(m) => m.score(line).is_some(),
+            CompiledExpr::Fuzzy(m) => m.is_match(line),
             CompiledExpr::Regex(re) => re.is_match(line),
             CompiledExpr::Hex(m) => m.find_from(line, 0).is_some(),
             CompiledExpr::EmptySet => false,
             CompiledExpr::And(a, b) => a.eval_on_line(line) && b.eval_on_line(line),
             CompiledExpr::Or(a, b) => a.eval_on_line(line) || b.eval_on_line(line),
             CompiledExpr::Not(a) => !a.eval_on_line(line),
+        }
+    }
+
+    fn required_anchor(&self) -> Option<AnchorRef<'_>> {
+        match self {
+            Self::Literal(m)
+                if !m.needle.is_empty()
+                    && !m.needle.contains(&b'\n')
+                    && !m.needle.contains(&b'\r') =>
+            {
+                if let Some(ref finder) = m.finder {
+                    Some(AnchorRef::Finder(finder, m.needle.len()))
+                } else {
+                    Some(AnchorRef::Literal(m))
+                }
+            }
+            Self::Exact(m) => m
+                .finder
+                .as_ref()
+                .map(|finder| AnchorRef::Finder(finder, m.text.len())),
+            Self::Fuzzy(m) if m.has_ascii_anchor() => Some(AnchorRef::FuzzyAscii(m)),
+            Self::And(a, b) => match (a.required_anchor(), b.required_anchor()) {
+                (Some(left), Some(right)) => {
+                    if right.priority() > left.priority() {
+                        Some(right)
+                    } else {
+                        Some(left)
+                    }
+                }
+                (Some(anchor), None) | (None, Some(anchor)) => Some(anchor),
+                (None, None) => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn needs_separate_occurrence_count(&self) -> bool {
+        match self {
+            Self::Fuzzy(_) => true,
+            Self::Regex(re) => re.captures_len() > 1,
+            Self::And(a, b) | Self::Or(a, b) => {
+                a.needs_separate_occurrence_count() || b.needs_separate_occurrence_count()
+            }
+            _ => false,
         }
     }
 
@@ -120,6 +164,9 @@ impl CompiledExpr {
     }
 
     fn count_matched_occurrences(&self, line: &[u8]) -> usize {
+        if matches!(self, Self::Fuzzy(_)) {
+            return 1;
+        }
         let mut occurrences = Vec::new();
         self.collect_occurrences(line, &mut occurrences);
         occurrences.sort_unstable();
@@ -164,16 +211,16 @@ impl CompiledExpr {
             }
             CompiledExpr::Fuzzy(m) => m.collect_spans(line, spans),
             CompiledExpr::Regex(re) => {
-                for caps in re.captures_iter(line) {
-                    if re.captures_len() > 1 {
+                if re.captures_len() > 1 {
+                    for caps in re.captures_iter(line) {
                         for i in 1..re.captures_len() {
                             if let Some(m) = caps.get(i) {
                                 spans.push((m.start(), m.end()));
                             }
                         }
-                    } else if let Some(m) = caps.get(0) {
-                        spans.push((m.start(), m.end()));
                     }
+                } else {
+                    spans.extend(re.find_iter(line).map(|m| (m.start(), m.end())));
                 }
             }
             CompiledExpr::Hex(m) => {
@@ -197,6 +244,33 @@ impl CompiledExpr {
                 }
             }
             CompiledExpr::Not(_) => {}
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AnchorRef<'a> {
+    Finder(&'a memchr::memmem::Finder<'static>, usize),
+    Literal(&'a SimdLiteralMatcher),
+    FuzzyAscii(&'a FuzzyMatcher),
+}
+
+impl<'a> AnchorRef<'a> {
+    #[inline]
+    fn priority(&self) -> (u8, usize) {
+        match self {
+            Self::Finder(_, len) => (3, *len),
+            Self::Literal(m) => (2, m.needle.len()),
+            Self::FuzzyAscii(_) => (1, 0),
+        }
+    }
+
+    #[inline]
+    fn find(&self, haystack: &[u8]) -> Option<usize> {
+        match self {
+            Self::Finder(finder, _) => finder.find(haystack),
+            Self::Literal(matcher) => find_substr_on_line(matcher, haystack),
+            Self::FuzzyAscii(matcher) => matcher.find_ascii_candidate_in_buffer(haystack),
         }
     }
 }
@@ -299,6 +373,53 @@ impl Matcher for BooleanEngine {
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))?;
 
         if self.proximity_filters.is_empty() {
+            let custom_occurrences = compiled.needs_separate_occurrence_count();
+            if let Some(anchor) = compiled.required_anchor() {
+                let mut count = 0;
+                let mut cursor = 0;
+                let mut last_newline = 0;
+                let mut current_line = 1;
+                while cursor < buffer.len() {
+                    let Some(match_rel) = anchor.find(&buffer[cursor..]) else {
+                        break;
+                    };
+                    let match_idx = cursor + match_rel;
+                    let (line_start, line_end, line_num) =
+                        super::find_line_bounds(buffer, match_idx, last_newline, current_line);
+                    let line = &buffer[line_start..line_end];
+
+                    if compiled.eval_on_line(line) {
+                        let mut spans = Vec::new();
+                        compiled.collect_spans(line, &mut spans);
+                        spans.sort_unstable();
+                        spans.dedup();
+                        let occ = if custom_occurrences {
+                            compiled.count_matched_occurrences(line)
+                        } else {
+                            spans.len().max(1)
+                        };
+                        let mut record = MatchRecord::new(line_num, line_start, line, spans);
+                        record.occurrence_count = occ;
+                        sink.on_match(record)?;
+                        count += 1;
+                    }
+
+                    let raw_end = if buffer.get(line_end) == Some(&b'\r') {
+                        line_end + 1
+                    } else {
+                        line_end
+                    };
+                    if raw_end < buffer.len() {
+                        cursor = raw_end + 1;
+                        last_newline = cursor;
+                        current_line = line_num + 1;
+                    } else {
+                        break;
+                    }
+                }
+                return Ok(count);
+            }
+
             let mut count = 0;
             for (number, offset, line) in Lines::new(buffer) {
                 if compiled.eval_on_line(line) {
@@ -306,8 +427,13 @@ impl Matcher for BooleanEngine {
                     compiled.collect_spans(line, &mut spans);
                     spans.sort_unstable();
                     spans.dedup();
+                    let occ = if custom_occurrences {
+                        compiled.count_matched_occurrences(line)
+                    } else {
+                        spans.len().max(1)
+                    };
                     let mut record = MatchRecord::new(number, offset, line, spans);
-                    record.occurrence_count = compiled.count_matched_occurrences(line);
+                    record.occurrence_count = occ;
                     sink.on_match(record)?;
                     count += 1;
                 }

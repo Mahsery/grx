@@ -1227,6 +1227,10 @@ impl Engine {
 
             let entries = Arc::new(std::sync::Mutex::new(Vec::new()));
             let entries_clone = Arc::clone(&entries);
+            let fuzzy_names = pred
+                .name_matcher
+                .as_ref()
+                .is_some_and(|matcher| matcher.has_fuzzy());
 
             let on_entry =
                 move |entry: crate::core::DirEntry| -> Result<(), crate::core::WalkerError> {
@@ -1257,6 +1261,14 @@ impl Engine {
                     } else {
                         (entry.size.unwrap_or(0), std::time::SystemTime::UNIX_EPOCH)
                     };
+                    let score = if fuzzy_names {
+                        pred.name_matcher
+                            .as_ref()
+                            .and_then(|matcher| matcher.score_on_line(&entry.name))
+                            .unwrap_or(0)
+                    } else {
+                        0
+                    };
                     if let Ok(mut lock) = entries_clone.lock() {
                         lock.push(BufferedEntry {
                             path,
@@ -1264,11 +1276,7 @@ impl Engine {
                             is_symlink: entry.is_symlink,
                             size,
                             mtime,
-                            score: pred
-                                .name_matcher
-                                .as_ref()
-                                .and_then(|matcher| matcher.score_on_line(&entry.name))
-                                .unwrap_or(0),
+                            score,
                         });
                     }
                     Ok(())
@@ -1664,9 +1672,16 @@ impl Engine {
                         .map(|record| record.to_owned())
                         .collect()
                 };
-                let mtime = std::fs::metadata(path)
-                    .and_then(|metadata| metadata.modified())
-                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                let mtime = if matches!(
+                    content_sort,
+                    Some(crate::dsl::SortKey::Modified | crate::dsl::SortKey::ModifiedDesc)
+                ) {
+                    std::fs::metadata(path)
+                        .and_then(|metadata| metadata.modified())
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                } else {
+                    std::time::SystemTime::UNIX_EPOCH
+                };
                 Ok(Some(BufferedFileResult {
                     path: path.to_path_buf(),
                     records,

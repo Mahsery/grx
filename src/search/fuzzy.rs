@@ -17,43 +17,99 @@ pub struct FuzzyMatcher {
     pattern: Vec<char>,
     ascii_pattern: Option<Vec<u8>>,
     case_sensitive: bool,
+    has_unicode_fold: bool,
 }
 
 impl FuzzyMatcher {
     pub fn new(pattern: &str, case_sensitive: bool) -> Self {
+        let ascii_pattern = pattern.is_ascii().then(|| {
+            if case_sensitive {
+                pattern.as_bytes().to_vec()
+            } else {
+                pattern.to_ascii_lowercase().into_bytes()
+            }
+        });
+        let has_unicode_fold = !case_sensitive
+            && ascii_pattern
+                .as_ref()
+                .is_some_and(|p| p.contains(&b'k'));
         Self {
             pattern: pattern.chars().collect(),
-            ascii_pattern: pattern.is_ascii().then(|| {
-                if case_sensitive {
-                    pattern.as_bytes().to_vec()
-                } else {
-                    pattern.to_ascii_lowercase().into_bytes()
-                }
-            }),
+            ascii_pattern,
             case_sensitive,
+            has_unicode_fold,
         }
     }
 
-    pub fn score(&self, bytes: &[u8]) -> Option<i32> {
-        let text = std::str::from_utf8(bytes).ok()?;
+    #[inline]
+    pub fn is_match(&self, bytes: &[u8]) -> bool {
         if self.pattern.is_empty() {
-            return Some(0);
+            return std::str::from_utf8(bytes).is_ok();
         }
-        if !self.is_subsequence(text) {
-            return None;
+        if let Some(pattern) = &self.ascii_pattern {
+            if self.is_ascii_subsequence_bytes(bytes, pattern) {
+                return std::str::from_utf8(bytes).is_ok();
+            }
+            if !self.has_unicode_fold || bytes.is_ascii() {
+                return false;
+            }
         }
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            return false;
+        };
+        self.is_char_subsequence(text)
+    }
+
+    pub fn score(&self, bytes: &[u8]) -> Option<i32> {
+        if self.pattern.is_empty() {
+            return std::str::from_utf8(bytes).ok().map(|_| 0);
+        }
+        let text = if let Some(pattern) = &self.ascii_pattern {
+            if self.is_ascii_subsequence_bytes(bytes, pattern) {
+                std::str::from_utf8(bytes).ok()?
+            } else if !self.has_unicode_fold || bytes.is_ascii() {
+                return None;
+            } else {
+                let text = std::str::from_utf8(bytes).ok()?;
+                if !self.is_char_subsequence(text) {
+                    return None;
+                }
+                text
+            }
+        } else {
+            let text = std::str::from_utf8(bytes).ok()?;
+            if !self.is_char_subsequence(text) {
+                return None;
+            }
+            text
+        };
         self.best(text, self.pattern.len(), &mut None)
             .map(|state| state.score)
     }
 
     pub fn match_range(&self, bytes: &[u8]) -> Option<(usize, usize)> {
-        let text = std::str::from_utf8(bytes).ok()?;
         if self.pattern.is_empty() {
-            return Some((0, 0));
+            return std::str::from_utf8(bytes).ok().map(|_| (0, 0));
         }
-        if !self.is_subsequence(text) {
-            return None;
-        }
+        let text = if let Some(pattern) = &self.ascii_pattern {
+            if self.is_ascii_subsequence_bytes(bytes, pattern) {
+                std::str::from_utf8(bytes).ok()?
+            } else if !self.has_unicode_fold || bytes.is_ascii() {
+                return None;
+            } else {
+                let text = std::str::from_utf8(bytes).ok()?;
+                if !self.is_char_subsequence(text) {
+                    return None;
+                }
+                text
+            }
+        } else {
+            let text = std::str::from_utf8(bytes).ok()?;
+            if !self.is_char_subsequence(text) {
+                return None;
+            }
+            text
+        };
         let state = self.best(text, self.pattern.len(), &mut None)?;
         Some((
             state.start,
@@ -62,12 +118,35 @@ impl FuzzyMatcher {
     }
 
     pub fn collect_spans(&self, bytes: &[u8], spans: &mut Vec<(usize, usize)>) {
-        let Ok(text) = std::str::from_utf8(bytes) else {
-            return;
-        };
-        if self.pattern.is_empty() || !self.is_subsequence(text) {
+        if self.pattern.is_empty() {
             return;
         }
+        let text = if let Some(pattern) = &self.ascii_pattern {
+            if self.is_ascii_subsequence_bytes(bytes, pattern) {
+                let Ok(text) = std::str::from_utf8(bytes) else {
+                    return;
+                };
+                text
+            } else if !self.has_unicode_fold || bytes.is_ascii() {
+                return;
+            } else {
+                let Ok(text) = std::str::from_utf8(bytes) else {
+                    return;
+                };
+                if !self.is_char_subsequence(text) {
+                    return;
+                }
+                text
+            }
+        } else {
+            let Ok(text) = std::str::from_utf8(bytes) else {
+                return;
+            };
+            if !self.is_char_subsequence(text) {
+                return;
+            }
+            text
+        };
         let mut trace = Some(Vec::new());
         let Some(state) = self.best(text, self.pattern.len(), &mut trace) else {
             return;
@@ -93,29 +172,85 @@ impl FuzzyMatcher {
         }
     }
 
+    #[inline]
+    pub(crate) fn has_ascii_anchor(&self) -> bool {
+        !self.has_unicode_fold
+            && self
+                .ascii_pattern
+                .as_ref()
+                .is_some_and(|p| !p.is_empty() && !p.contains(&b'\n') && !p.contains(&b'\r'))
+    }
+
+    #[inline]
+    pub(crate) fn find_ascii_candidate_in_buffer(&self, buffer: &[u8]) -> Option<usize> {
+        let pattern = self.ascii_pattern.as_ref()?;
+        let mut cursor = 0;
+        loop {
+            if cursor + pattern.len() > buffer.len() {
+                return None;
+            }
+            let mut pos = cursor;
+            let mut first_pos = 0;
+            for (i, &byte) in pattern.iter().enumerate() {
+                let upper = byte.to_ascii_uppercase();
+                let rel = if !self.case_sensitive && byte != upper {
+                    memchr2(byte, upper, &buffer[pos..])?
+                } else {
+                    memchr(byte, &buffer[pos..])?
+                };
+                let match_idx = pos + rel;
+                if i == 0 {
+                    first_pos = match_idx;
+                }
+                pos = match_idx + 1;
+            }
+            let last_pos = pos - 1;
+            if let Some(nl_rel) = memchr::memrchr(b'\n', &buffer[first_pos..last_pos]) {
+                cursor = first_pos + nl_rel + 1;
+            } else {
+                return Some(first_pos);
+            }
+        }
+    }
+
+    #[inline]
+    fn is_ascii_subsequence_bytes(&self, bytes: &[u8], pattern: &[u8]) -> bool {
+        if bytes.len() < pattern.len() {
+            return false;
+        }
+        let mut remaining = bytes;
+        for &byte in pattern {
+            let upper = byte.to_ascii_uppercase();
+            let position = if !self.case_sensitive && byte != upper {
+                memchr2(byte, upper, remaining)
+            } else {
+                memchr(byte, remaining)
+            };
+            let Some(position) = position else {
+                return false;
+            };
+            remaining = &remaining[position + 1..];
+        }
+        true
+    }
+
+    #[cfg(test)]
     fn is_subsequence(&self, text: &str) -> bool {
         if self.pattern.is_empty() {
             return true;
         }
-
-        if let Some(pattern) = &self.ascii_pattern
-            && text.is_ascii()
-        {
-            let mut remaining = text.as_bytes();
-            for &byte in pattern {
-                let upper = byte.to_ascii_uppercase();
-                let position = if !self.case_sensitive && byte != upper {
-                    memchr2(byte, upper, remaining)
-                } else {
-                    memchr(byte, remaining)
-                };
-                let Some(position) = position else {
-                    return false;
-                };
-                remaining = &remaining[position + 1..];
+        if let Some(pattern) = &self.ascii_pattern {
+            if self.is_ascii_subsequence_bytes(text.as_bytes(), pattern) {
+                return true;
             }
-            return true;
+            if !self.has_unicode_fold || text.is_ascii() {
+                return false;
+            }
         }
+        self.is_char_subsequence(text)
+    }
+
+    fn is_char_subsequence(&self, text: &str) -> bool {
         let mut next = 0;
         for ch in text.chars() {
             if chars_equal(self.pattern[next], ch, self.case_sensitive) {
@@ -134,7 +269,12 @@ impl FuzzyMatcher {
         length: usize,
         trace: &mut Option<Vec<(usize, Option<usize>)>>,
     ) -> Option<State> {
-        if text.chars().count() == length && self.is_subsequence(text) {
+        let exact_char_len = if self.ascii_pattern.is_some() && !self.has_unicode_fold {
+            text.len() == length
+        } else {
+            text.len() <= length.saturating_mul(4) && text.chars().count() == length
+        };
+        if exact_char_len {
             let mut state = State {
                 score: 0,
                 start: 0,
