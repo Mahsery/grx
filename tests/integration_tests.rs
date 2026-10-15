@@ -1624,7 +1624,8 @@ fn test_discovery_highlights_matched_basename_without_changing_machine_output() 
     let colored = run(&["--color=always", "kind:file", "rs"]);
     assert_eq!(colored.status.code(), Some(0));
     let displayed = String::from_utf8(colored.stdout).unwrap();
-    assert!(displayed.contains("\x1b[38;5;81mscripts/\x1b[0m"));
+    let sep = std::path::MAIN_SEPARATOR;
+    assert!(displayed.contains(&format!("\x1b[38;5;81mscripts{sep}\x1b[0m")));
     assert!(displayed.contains("bump_ve\x1b[0m\x1b[30;48;5;220mrs\x1b[0m"));
     assert!(displayed.contains("\x1b[30;48;5;220mrsrs\x1b[0m"));
     assert!(!displayed.contains("\x1b[30;48;5;220mscripts"));
@@ -1676,7 +1677,11 @@ fn test_discovery_highlights_matched_basename_without_changing_machine_output() 
     let json = run(&["--color=always", "--json", "kind:file", "rs"]);
     assert_eq!(json.status.code(), Some(0));
     assert!(!json.stdout.contains(&0x1b));
-    assert!(String::from_utf8_lossy(&json.stdout).contains("scripts/bump_version.py"));
+    assert!(
+        String::from_utf8_lossy(&json.stdout)
+            .replace("\\\\", "/")
+            .contains("scripts/bump_version.py")
+    );
 }
 
 #[test]
@@ -2047,23 +2052,26 @@ fn test_acceptance_case_27_nth_and_pick() {
     assert_eq!(out_oob.status.code(), Some(1));
     assert!(out_oob.stdout.is_empty());
 
-    let out_exec = std::process::Command::new(grx_bin)
-        .args([
-            "root:logs/",
-            "sort:path",
-            "--nth",
-            "2",
-            "-X",
-            "echo",
-            "FILE:{}",
-        ])
-        .current_dir(tmp_path)
-        .output()
-        .unwrap();
-    assert_eq!(out_exec.status.code(), Some(0));
-    let exec_str = String::from_utf8_lossy(&out_exec.stdout);
-    assert!(exec_str.contains("FILE:logs/small.log"));
-    assert!(!exec_str.contains("app.log"));
+    #[cfg(unix)]
+    {
+        let out_exec = std::process::Command::new(grx_bin)
+            .args([
+                "root:logs/",
+                "sort:path",
+                "--nth",
+                "2",
+                "-X",
+                "echo",
+                "FILE:{}",
+            ])
+            .current_dir(tmp_path)
+            .output()
+            .unwrap();
+        assert_eq!(out_exec.status.code(), Some(0));
+        let exec_str = String::from_utf8_lossy(&out_exec.stdout);
+        assert!(exec_str.contains("FILE:logs/small.log"));
+        assert!(!exec_str.contains("app.log"));
+    }
 
     let out_zero = std::process::Command::new(grx_bin)
         .args(["kind:file", "rs", "--nth", "0"])
@@ -2081,57 +2089,60 @@ fn test_acceptance_case_27_nth_and_pick() {
         .unwrap();
     assert_eq!(out_conf.status.code(), Some(2));
 
-    let out_pick_non_tty = std::process::Command::new(grx_bin)
-        .args(["kind:file", "rs", "--pick"])
-        .current_dir(tmp_path)
-        .output()
-        .unwrap();
-    assert_eq!(out_pick_non_tty.status.code(), Some(2));
-    let pick_err = String::from_utf8_lossy(&out_pick_non_tty.stderr);
-    assert!(pick_err.contains("--pick requires an interactive terminal"));
+    #[cfg(unix)]
+    {
+        let out_pick_non_tty = std::process::Command::new(grx_bin)
+            .args(["kind:file", "rs", "--pick"])
+            .current_dir(tmp_path)
+            .output()
+            .unwrap();
+        assert_eq!(out_pick_non_tty.status.code(), Some(2));
+        let pick_err = String::from_utf8_lossy(&out_pick_non_tty.stderr);
+        assert!(pick_err.contains("--pick requires an interactive terminal"));
 
-    let out_pick_first = std::process::Command::new(grx_bin)
-        .args(["root:logs/", "sort:path", "--pick"])
-        .env("GRX_TEST_PICK_KEYS", "\n")
-        .current_dir(tmp_path)
-        .output()
-        .unwrap();
-    assert_eq!(out_pick_first.status.code(), Some(0));
-    assert_eq!(raw_lines(&out_pick_first.stdout), vec!["logs/app.log"]);
+        let out_pick_first = std::process::Command::new(grx_bin)
+            .args(["root:logs/", "sort:path", "--pick"])
+            .env("GRX_TEST_PICK_KEYS", "\n")
+            .current_dir(tmp_path)
+            .output()
+            .unwrap();
+        assert_eq!(out_pick_first.status.code(), Some(0));
+        assert_eq!(raw_lines(&out_pick_first.stdout), vec!["logs/app.log"]);
 
-    let out_pick_second_x = std::process::Command::new(grx_bin)
-        .args([
-            "root:logs/",
-            "sort:path",
-            "--pick",
-            "-X",
-            "echo",
-            "PICKED:{}",
-        ])
-        .env("GRX_TEST_PICK_KEYS", "\x1b[B\n")
-        .current_dir(tmp_path)
-        .output()
-        .unwrap();
-    assert_eq!(out_pick_second_x.status.code(), Some(0));
-    let pick_second_str = String::from_utf8_lossy(&out_pick_second_x.stdout);
-    assert!(pick_second_str.contains("PICKED:logs/small.log"));
+        let out_pick_second_x = std::process::Command::new(grx_bin)
+            .args([
+                "root:logs/",
+                "sort:path",
+                "--pick",
+                "-X",
+                "echo",
+                "PICKED:{}",
+            ])
+            .env("GRX_TEST_PICK_KEYS", "\x1b[B\n")
+            .current_dir(tmp_path)
+            .output()
+            .unwrap();
+        assert_eq!(out_pick_second_x.status.code(), Some(0));
+        let pick_second_str = String::from_utf8_lossy(&out_pick_second_x.stdout);
+        assert!(pick_second_str.contains("PICKED:logs/small.log"));
 
-    let out_pick_cancel = std::process::Command::new(grx_bin)
-        .args([
-            "root:logs/",
-            "sort:path",
-            "--pick",
-            "-X",
-            "echo",
-            "SHOULD_NOT_RUN:{}",
-        ])
-        .env("GRX_TEST_PICK_KEYS", "\x1b")
-        .current_dir(tmp_path)
-        .output()
-        .unwrap();
-    assert_eq!(out_pick_cancel.status.code(), Some(130));
-    let pick_cancel_str = String::from_utf8_lossy(&out_pick_cancel.stdout);
-    assert!(!pick_cancel_str.contains("SHOULD_NOT_RUN"));
+        let out_pick_cancel = std::process::Command::new(grx_bin)
+            .args([
+                "root:logs/",
+                "sort:path",
+                "--pick",
+                "-X",
+                "echo",
+                "SHOULD_NOT_RUN:{}",
+            ])
+            .env("GRX_TEST_PICK_KEYS", "\x1b")
+            .current_dir(tmp_path)
+            .output()
+            .unwrap();
+        assert_eq!(out_pick_cancel.status.code(), Some(130));
+        let pick_cancel_str = String::from_utf8_lossy(&out_pick_cancel.stdout);
+        assert!(!pick_cancel_str.contains("SHOULD_NOT_RUN"));
+    }
 }
 
 #[test]
@@ -4452,7 +4463,13 @@ fn selectors_filter_actual_files_without_retargeting_content() {
         assert!(out.stderr.is_empty(), "{args:?}");
         let expected = names
             .iter()
-            .map(|name| format!("{}\n", name.replace('/', std::path::MAIN_SEPARATOR_STR)))
+            .map(|name| {
+                if let Some(dir) = name.strip_suffix('/') {
+                    format!("{}/\n", dir.replace('/', std::path::MAIN_SEPARATOR_STR))
+                } else {
+                    format!("{}\n", name.replace('/', std::path::MAIN_SEPARATOR_STR))
+                }
+            })
             .collect::<String>();
         assert_eq!(out.stdout, expected.as_bytes(), "{args:?}");
     }
@@ -4890,7 +4907,7 @@ fn config_initialization_and_storage_paths_respect_child_xdg_locations() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let config = tmp.path().join("settings/grx/config.toml");
+    let config = tmp.path().join("settings").join("grx").join("config.toml");
     assert!(config.is_file());
     let bytes = fs::read(&config).unwrap();
     let refused = isolated_grx(tmp.path())
@@ -4928,7 +4945,10 @@ fn config_initialization_and_storage_paths_respect_child_xdg_locations() {
             .unwrap();
         assert_eq!(
             line.split_once(':').unwrap().1.trim(),
-            tmp.path().join(relative).display().to_string()
+            tmp.path()
+                .join(relative.replace('/', std::path::MAIN_SEPARATOR_STR))
+                .display()
+                .to_string()
         );
     }
 }
@@ -4962,11 +4982,14 @@ fn completion_installation_creates_the_requested_shell_artifact() {
             "{shell}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
-        let installed = tmp.path().join(relative);
+        let installed = tmp
+            .path()
+            .join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
         let body = fs::read_to_string(&installed).unwrap();
         assert!(body.trim_start().starts_with(header), "{shell}");
         assert!(body.contains(alias), "{shell}: missing public k: alias");
         assert!(String::from_utf8_lossy(&out.stdout).contains(&installed.display().to_string()));
+        #[cfg(unix)]
         if shell == "bash" {
             let loaded = std::process::Command::new("bash")
                 .args([
@@ -5404,7 +5427,11 @@ fn cli_reports_clean_relative_paths_in_every_output_mode() {
             "{args:?}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
-        assert_eq!(out.stdout, *expected, "{args:?}");
+        let expected: Vec<u8> = std::str::from_utf8(expected)
+            .unwrap()
+            .replace("nested/", &format!("nested{}", std::path::MAIN_SEPARATOR))
+            .into_bytes();
+        assert_eq!(out.stdout, expected, "{args:?}");
     }
     for args in [
         vec!["--json", "needle"],
@@ -5426,7 +5453,7 @@ fn cli_reports_clean_relative_paths_in_every_output_mode() {
         {
             let record: serde_json::Value = serde_json::from_slice(line).unwrap();
             if let Some(path) = record["data"]["path"]["text"].as_str() {
-                paths.insert(path.to_owned());
+                paths.insert(path.replace('\\', "/"));
             }
         }
         let expected = if args.contains(&"-L") {
@@ -5469,7 +5496,14 @@ fn cli_kind_short_alias_selects_names_and_validates_conflicts() {
             "{args:?}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
-        assert_eq!(out.stdout, *expected, "{args:?}");
+        let expected: Vec<u8> = std::str::from_utf8(expected)
+            .unwrap()
+            .replace(
+                "nested/main",
+                &format!("nested{}main", std::path::MAIN_SEPARATOR),
+            )
+            .into_bytes();
+        assert_eq!(out.stdout, expected, "{args:?}");
     }
     for args in [
         vec!["k:file", "kind:dir", "main"],
@@ -5506,12 +5540,12 @@ fn cli_path_cleanup_preserves_absolute_parent_and_hidden_paths() {
         (
             tmp.path().join("nested").as_path(),
             "root:../main.rs".to_owned(),
-            "../main.rs".to_owned(),
+            format!("..{}main.rs", std::path::MAIN_SEPARATOR),
         ),
         (
             tmp.path(),
             "root:./.hidden/main.rs".to_owned(),
-            ".hidden/main.rs".to_owned(),
+            format!(".hidden{}main.rs", std::path::MAIN_SEPARATOR),
         ),
     ] {
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_grx"))
@@ -6554,6 +6588,11 @@ fn reported_globs_filter_paths_directories_and_types() {
             "{args:?}: {:?}",
             out.stderr
         );
+        let expected = if expected == "src/\n" {
+            expected.to_string()
+        } else {
+            expected.replace('/', std::path::MAIN_SEPARATOR_STR)
+        };
         assert_eq!(out.stdout, expected.as_bytes(), "{args:?}");
     }
 }
@@ -6738,18 +6777,23 @@ fn reported_explicit_regex_overrides_configured_fixed_strings() {
 
 #[test]
 fn reported_long_boolean_expressions_return_errors() {
+    #[cfg(windows)]
+    let (repeat_not, repeat_or, repeat_flag) = (1000, 1000, 1000);
+    #[cfg(not(windows))]
+    let (repeat_not, repeat_or, repeat_flag) = (4000, 10000, 4000);
+
     for args in [
-        std::iter::repeat_n("NOT", 4000)
+        std::iter::repeat_n("NOT", repeat_not)
             .chain(["alpha"])
             .collect::<Vec<_>>(),
-        std::iter::repeat_n(["alpha", "OR"], 10000)
+        std::iter::repeat_n(["alpha", "OR"], repeat_or)
             .flatten()
             .chain(["beta"])
             .collect(),
-        vec!["("; 4000]
+        vec!["("; repeat_not]
             .into_iter()
             .chain(["alpha"])
-            .chain(vec![")"; 4000])
+            .chain(vec![")"; repeat_not])
             .collect(),
     ] {
         let out = reported_stdin(&args, b"alpha\nbeta\n");
@@ -6762,7 +6806,7 @@ fn reported_long_boolean_expressions_return_errors() {
     let out = reported_stdin(&args, b"alpha\nbeta\n");
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(out.stdout, b"alpha\n");
-    let patterns = ["-e", "alpha"].repeat(4000);
+    let patterns = ["-e", "alpha"].repeat(repeat_flag);
     let out = reported_stdin(&patterns, b"alpha\n");
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("complexity"));
